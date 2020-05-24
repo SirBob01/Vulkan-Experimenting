@@ -3,15 +3,11 @@
 PhysicalDevice::PhysicalDevice(vk::PhysicalDevice handle, vk::SurfaceKHR surface) {
     handle_ = handle;
     surface_ = surface;
-    swapchain_ = {
-        handle_.getSurfaceCapabilitiesKHR(surface_),
-        handle_.getSurfaceFormatsKHR(surface_),
-        handle_.getSurfacePresentModesKHR(surface_)
-    };
 
     // Add the extensions required by all devices
     extensions_.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     get_command_queues();
+    get_swapchain_support();
 } 
 
 bool PhysicalDevice::is_complete() {
@@ -67,6 +63,11 @@ QueueFamilyIndices &PhysicalDevice::get_queue_families() {
 }
 
 SwapchainSupport &PhysicalDevice::get_swapchain_support() {
+    swapchain_ = {
+        handle_.getSurfaceCapabilitiesKHR(surface_),
+        handle_.getSurfaceFormatsKHR(surface_),
+        handle_.getSurfacePresentModesKHR(surface_)
+    };
     return swapchain_;
 }
 

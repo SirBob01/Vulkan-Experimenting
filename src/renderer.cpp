@@ -19,22 +19,6 @@
 
 using ShaderBytes = std::vector<char>; // Vulkan shader bytecode for parsing
 
-// Experimental Renderer that handles low-level 
-// interfacing with Vulkan API
-// All initialization functions are defined in order
-// * Get all required extensions from SDL  /
-// * Create Instance                       /
-// * Create Surface (attach to SDL_Window) /
-// * Choose physical device                /
-// * Create logical device                 /
-// * Create swapchain                      /
-// * Create image views                    /
-// * Create render pass                    /
-// * Create graphics pipeline              /
-// * Create framebuffers                   / -- Understand these last steps
-// * Record command buffers                /
-// * Create semaphores/fences              /
-// * Write refresh (main loop) code        /
 class Renderer {
     SDL_Window *window_;
 
@@ -81,8 +65,8 @@ class Renderer {
 
     // Semaphores
     // Ensures correct ordering between graphic and present commands
-    std::vector<vk::UniqueSemaphore> image_available_semaphore_;
-    std::vector<vk::UniqueSemaphore> render_finished_semaphore_;
+    std::vector<vk::UniqueSemaphore> image_available_semaphores_;
+    std::vector<vk::UniqueSemaphore> render_finished_semaphores_;
 
     // Fences
     // Synchronizes between GPU and CPU processes
@@ -101,11 +85,11 @@ class Renderer {
         extensions_.resize(count);
         SDL_Vulkan_GetInstanceExtensions(window_, &count, &extensions_[0]);
 
-        if constexpr(DEBUG) {
+        if(DEBUG) {
             layers_.push_back("VK_LAYER_KHRONOS_validation");
-            std::cout << "Vulkan Extensions:\n";
+            std::cerr << "Vulkan Extensions:\n";
             for(auto &extension : extensions_) {
-                std::cout << "* " << extension << "\n";
+                std::cerr << "* " << extension << "\n";
             }
         }
     }
@@ -125,7 +109,7 @@ class Renderer {
 
     // Create the Vulkan instance
     void create_instance() {
-        if(!is_supporting_layers()) {
+        if(!is_supporting_layers() && DEBUG) {
             throw std::runtime_error("Requested Vulkan layers unavailable.");
         }
         vk::ApplicationInfo app_info(
@@ -154,7 +138,7 @@ class Renderer {
             extensions_.size(),
             &extensions_[0]    // Required extensions
         );
-        if constexpr(DEBUG) {
+        if(DEBUG) {
             create_info.pNext = &features;        
         }
         instance_ = vk::createInstanceUnique(create_info);
@@ -175,11 +159,11 @@ class Renderer {
     // Choose the best available physical device
     void create_physical_device() {
         auto devices = instance_->enumeratePhysicalDevices();
-        if constexpr(DEBUG) {
-            std::cout << "Physical Devices:\n";
+        if(DEBUG) {
+            std::cerr << "Physical Devices:\n";
             for(auto &physical : devices) {
                 auto properties = physical.getProperties();
-                std::cout << "* " << properties.deviceName << "\n";
+                std::cerr << "* " << properties.deviceName << "\n";
             }
         }
 
@@ -621,16 +605,17 @@ class Renderer {
         }
     }
 
-    // Initialize buffers for submitting commands
-    void create_command_buffers() {
-        // Command pool manages buffer memory
+    // Create the command pool that manages buffer memory
+    void create_command_pool() {
         vk::CommandPoolCreateInfo create_info(
             vk::CommandPoolCreateFlags(),
             physical_->get_queue_families().graphics
         );
         command_pool_ = logical_->createCommandPoolUnique(create_info);
+    }
 
-        // Allocate the command buffers
+    // Allocate buffers for submitting commands
+    void create_command_buffers() {
         vk::CommandBufferAllocateInfo alloc_info(
             command_pool_.get(),
             vk::CommandBufferLevel::ePrimary,
@@ -687,22 +672,23 @@ class Renderer {
     // Initialize semaphores and fences to synchronize command buffers
     // * Image available - Image is available for rendering (pre-rendering)
     // * Render finished - Image can be presented to display (post-rendering)
+    // TODO: Understand purpose of various fence objects...???
     void create_synchronizers() {
         vk::SemaphoreCreateInfo semaphore_info;
         vk::FenceCreateInfo fence_info(
             vk::FenceCreateFlagBits::eSignaled
         );
 
-        image_available_semaphore_.resize(max_frames_processing_);
-        render_finished_semaphore_.resize(max_frames_processing_);
+        image_available_semaphores_.resize(max_frames_processing_);
+        render_finished_semaphores_.resize(max_frames_processing_);
         wait_fences_.resize(max_frames_processing_);
-        active_images_.resize(images_.size(), nullptr);
+        active_images_.resize(images_.size());
 
         for(int i = 0; i < max_frames_processing_; i++) {
-            image_available_semaphore_[i] = std::move(
+            image_available_semaphores_[i] = std::move(
                 logical_->createSemaphoreUnique(semaphore_info)
             );
-            render_finished_semaphore_[i] = std::move(
+            render_finished_semaphores_[i] = std::move(
                 logical_->createSemaphoreUnique(semaphore_info)
             );
             wait_fences_[i] = std::move(
@@ -711,10 +697,44 @@ class Renderer {
         }
     }
 
+    // Reset the swapchain on changes in window size
+    void reset_swapchain() {
+        logical_->waitIdle();
+
+        // Handle minimized window (special case)
+        int width = 0, height = 0;
+        while(!width || !height) {
+            SDL_Vulkan_GetDrawableSize(window_, &width, &height);
+        }
+
+        // Clear array objects
+        command_buffers_.clear();
+        images_.clear();
+        views_.clear();
+        framebuffers_.clear();
+
+        // Recreate swapchain and its dependents
+        try {
+            create_swapchain();
+            create_views();
+            
+            create_render_pass();
+            create_graphics_pipeline();
+            
+            create_framebuffers();
+            create_command_buffers();
+            record_commands();
+        }
+        catch(vk::SystemError &err) {
+            std::cerr << "Vulkan SystemError: " << err.what() << "\n";
+            exit(-1);
+        }
+    }
+
 public:
     Renderer(SDL_Window *window) {
         window_ = window;
-        max_frames_processing_ = 3;
+        max_frames_processing_ = 2;
         current_frame_ = 0;
 
         // Perform all initialization steps
@@ -732,13 +752,14 @@ public:
             create_graphics_pipeline();
             
             create_framebuffers();
+            create_command_pool();
             create_command_buffers();
             record_commands();
 
             create_synchronizers();
         }
         catch(vk::SystemError &err) {
-            std::cout << "Vulkan SystemError: " << err.what() << "\n";
+            std::cerr << "Vulkan SystemError: " << err.what() << "\n";
             exit(-1);
         }
     }
@@ -757,12 +778,16 @@ public:
 
         // Grab the next available image to render to
         uint32_t image_index;
-        logical_->acquireNextImageKHR(
+        vk::Result result = logical_->acquireNextImageKHR(
             swapchain_.get(),
             UINT64_MAX,
-            image_available_semaphore_[current_frame_].get(),
+            image_available_semaphores_[current_frame_].get(),
             nullptr, &image_index
         );
+        if(result == vk::Result::eErrorOutOfDateKHR) {
+            reset_swapchain();
+            return;
+        }
 
         if(active_images_[image_index]) {
             logical_->waitForFences(
@@ -779,10 +804,10 @@ public:
             vk::PipelineStageFlagBits::eColorAttachmentOutput
         };
         vk::SubmitInfo submit_info(
-            1, &image_available_semaphore_[current_frame_].get(),
+            1, &image_available_semaphores_[current_frame_].get(),
             wait_stages,
             1, &command_buffers_[image_index].get(),
-            1, &render_finished_semaphore_[current_frame_].get()
+            1, &render_finished_semaphores_[current_frame_].get()
         );
         graphics_queue_.submit(
             submit_info, 
@@ -792,12 +817,19 @@ public:
         // Present rendered image to the display!
         // After presenting, wait for next ready image
         vk::PresentInfoKHR present_info(
-            1, &render_finished_semaphore_[current_frame_].get(),
+            1, &render_finished_semaphores_[current_frame_].get(),
             1, &swapchain_.get(),
             &image_index, nullptr
         );
-        present_queue_.presentKHR(present_info);
-        present_queue_.waitIdle();
+        try {
+            // For some reason, this throws an exception instead...
+            present_queue_.presentKHR(present_info);
+            present_queue_.waitIdle();
+        }
+        catch(vk::OutOfDateKHRError &err) {
+            reset_swapchain();
+            return;
+        }
 
         current_frame_++;
         current_frame_ %= max_frames_processing_;

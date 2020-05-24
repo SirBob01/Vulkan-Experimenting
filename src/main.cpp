@@ -16,7 +16,7 @@ int main(int argc, char **argv) {
         SDL_WINDOWPOS_CENTERED,
         width,
         height,
-        SDL_WINDOW_VULKAN
+        SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
     );
 
     // Instantiate Renderer class

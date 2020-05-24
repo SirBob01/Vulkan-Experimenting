@@ -44,7 +44,7 @@ public:
     // Get the queue families
     QueueFamilyIndices &get_queue_families();
 
-    // Get the swapchain options
+    // Query the swapchain options for the device
     SwapchainSupport &get_swapchain_support();
 
     // Get all extensions available to the device
