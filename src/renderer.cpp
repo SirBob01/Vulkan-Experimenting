@@ -1,15 +1,15 @@
 #include <vulkan/vulkan.hpp>
-#include <SDL2/SDL.h>
 #include <SDL2/SDL_vulkan.h>
 
-#include <string>
 #include <vector>
-#include <set>
 
 #include <exception>
 #include <iostream>
 #include <fstream>
 #include <memory>
+
+#include "physical.h"
+#include "util.h"
 
 #ifndef NDEBUG
     #define DEBUG true
@@ -17,132 +17,7 @@
     #define DEBUG false
 #endif
 
-template <typename T>
-T clamp(T x, T min, T max) {
-    return std::min(max, std::max(x, min));
-}
-
-struct QueueFamilyIndices {
-    int graphics = -1; // Graphics commands
-    int present = -1;  // Presentation commands
-};
-
-struct SwapchainSupport {
-    vk::SurfaceCapabilitiesKHR capabilities;   // Surface capabilities
-    std::vector<vk::SurfaceFormatKHR> formats; // Pixel format, colorspace
-    std::vector<vk::PresentModeKHR> presents;  // Presentation modes
-};
-
 using ShaderBytes = std::vector<char>; // Vulkan shader bytecode for parsing
-
-class PhysicalDevice {
-    vk::PhysicalDevice handle_;
-    vk::SurfaceKHR surface_;
-
-    SwapchainSupport swapchain_;
-    QueueFamilyIndices queue_families_; 
-    
-    int score_;
-    std::vector<const char *> extensions_;
-
-    bool is_complete() {
-        bool graphics = queue_families_.graphics >= 0;
-        bool presentation = queue_families_.present >= 0;
-        return graphics && presentation;
-    }
-    
-    bool is_supporting_extensions() {
-        auto available = handle_.enumerateDeviceExtensionProperties();
-        std::set<std::string> required(
-            extensions_.begin(),
-            extensions_.end()
-        );
-
-        for(auto &extension : available) {
-            required.erase(extension.extensionName);
-        }
-        return required.empty();
-    }
-
-    bool is_supporting_swapchain() {
-        bool formats = swapchain_.formats.empty();
-        bool presents = swapchain_.presents.empty();
-        return !formats && !presents;
-    }
-    
-    void get_command_queues() {
-        auto families = handle_.getQueueFamilyProperties();
-        int i = 0;
-
-        for(auto &family : families) {
-            bool present_support = handle_.getSurfaceSupportKHR(i, surface_);
-            if(present_support) {
-                queue_families_.present = i;
-            }
-            if(family.queueFlags & vk::QueueFlagBits::eGraphics) {
-                queue_families_.graphics = i;
-            }
-            if(is_complete()) {
-                break;
-            }
-            i++;
-        }
-    }
-
-public:
-    PhysicalDevice(vk::PhysicalDevice handle, vk::SurfaceKHR surface) {
-        handle_ = handle;
-        surface_ = surface;
-        swapchain_ = {
-            handle_.getSurfaceCapabilitiesKHR(surface_),
-            handle_.getSurfaceFormatsKHR(surface_),
-            handle_.getSurfacePresentModesKHR(surface_)
-        };
-
-        score_ = 0;
-
-        // Add the extensions required by all devices
-        extensions_.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-        get_command_queues();
-    } 
-    
-    vk::PhysicalDevice get_handle() {
-        return handle_;
-    }  
-    
-    QueueFamilyIndices &get_queue_families() {
-        return queue_families_;
-    }
-
-    SwapchainSupport &get_swapchain_support() {
-        return swapchain_;
-    }
-
-    const std::vector<const char *> &get_extensions() {
-        return extensions_;
-    }
-
-    // Calculate the metric for GPU power
-    int get_score() {
-        auto properties = handle_.getProperties();
-        auto features = handle_.getFeatures();
-        int score = 0;
-
-        if(!is_complete() ||
-           !is_supporting_extensions() ||
-           !is_supporting_swapchain() ||
-           !features.geometryShader) {
-            return 0;
-        }
-
-        auto discrete = vk::PhysicalDeviceType::eDiscreteGpu;
-        if(properties.deviceType == discrete) {
-            score += 1000;
-        }
-        score += properties.limits.maxImageDimension2D;
-        return score;
-    }
-};
 
 // Experimental Renderer that handles low-level 
 // interfacing with Vulkan API
@@ -157,8 +32,7 @@ public:
 // * Create render pass                    /
 // * Create graphics pipeline              /
 // * Create framebuffers                   / -- Understand these last steps
-// * Create command buffers                /
-// * Record all commands                   /
+// * Record command buffers                /
 // * Create semaphores/fences              /
 // * Write refresh (main loop) code        /
 class Renderer {
@@ -195,20 +69,22 @@ class Renderer {
     // Framebuffers
     std::vector<vk::UniqueFramebuffer> framebuffers_;
 
-    // Command pool
+    // Command pool (memory buffer for commands)
     vk::UniqueCommandPool command_pool_;
 
-    // Command buffer
+    // Command buffer (recording commands)
     std::vector<vk::UniqueCommandBuffer> command_buffers_;
 
-    // Command Queues
+    // Command Queues (submitting commands)
     vk::Queue graphics_queue_;
     vk::Queue present_queue_;
 
     // Semaphores
-    std::vector<vk::UniqueSemaphore> image_available_;
-    std::vector<vk::UniqueSemaphore> render_finished_;
+    // Ensures correct ordering between graphic and present commands
+    std::vector<vk::UniqueSemaphore> image_available_semaphore_;
+    std::vector<vk::UniqueSemaphore> render_finished_semaphore_;
 
+    // Frame processing indices
     int max_frames_processing_;
     int current_frame_;
 
@@ -516,8 +392,10 @@ class Renderer {
         );
     }
 
-    // Initialize the render pass (color, depth, stencil buffers)
-    // TODO: Understand this better
+    // Initialize the render pass
+    // Describes the scope of a render operation (color, depth, stencil)
+    // Lists attachments, dependencies, and subpasses
+    // Driver knows what to expect for render operation
     void create_render_pass() {
         // Color buffer for a single swapchain image
         vk::AttachmentDescription color_attachment(
@@ -560,7 +438,8 @@ class Renderer {
 
     // Initialize all stages of the graphics pipeline
     // This determines what and how things are drawn
-    // This is the heart of the Renderer
+    // This is the heart of the Renderer, fixed at runtime
+    // We can have multiple pipelines for different types of rendering
     // TODO: Figure out how to make other graphics pipelines
     //       This is specialized for triangle drawing.
     void create_graphics_pipeline() {
@@ -617,7 +496,7 @@ class Renderer {
             1, &scissor
         );
 
-        // Rasterization stage (converts primitives to fragments)
+        // Rasterization stage (converts vectors to pixels)
         vk::PipelineRasterizationStateCreateInfo rasterizer_info(
             vk::PipelineRasterizationStateCreateFlags(),
             false, // Depth clamp enable (shadow maps)
@@ -709,7 +588,7 @@ class Renderer {
             &dynamic_info,
             layout_.get(),
             render_pass_.get(), // Can use other (compatible) render passes
-            0,                  // Subpass
+            0,                  // Subpass index
             nullptr, -1         // Base pipeline handle/index
         );
         pipeline_ = logical_->createGraphicsPipelineUnique(
@@ -718,14 +597,14 @@ class Renderer {
     }
 
     // Create the framebuffers for each swapchain image
-    // TODO: Understand this better
+    // Framebuffers hold the memory attachments used by render pass
+    // Ex. color image buffer and depth buffer
     void create_framebuffers() {
         for(auto &view : views_) {
-            vk::ImageView attachment = view.get();
             vk::FramebufferCreateInfo framebuffer_info(
                 vk::FramebufferCreateFlags(),
                 render_pass_.get(),
-                1, &attachment,
+                1, &view.get(),
                 image_extent_.width,
                 image_extent_.height,
                 1
@@ -805,14 +684,14 @@ class Renderer {
     // * Render finished - Image can be presented to display (post-rendering)
     void create_synchronizers() {
         vk::SemaphoreCreateInfo create_info;
-        image_available_.resize(max_frames_processing_);
-        render_finished_.resize(max_frames_processing_);
+        image_available_semaphore_.resize(max_frames_processing_);
+        render_finished_semaphore_.resize(max_frames_processing_);
 
         for(int i = 0; i < max_frames_processing_; i++) {
-            image_available_[i] = std::move(
+            image_available_semaphore_[i] = std::move(
                 logical_->createSemaphoreUnique(create_info)
             );
-            render_finished_[i] = std::move(
+            render_finished_semaphore_[i] = std::move(
                 logical_->createSemaphoreUnique(create_info)
             );
         }
@@ -827,12 +706,11 @@ public:
         // Perform all initialization steps
         try {
             get_extensions();
-            
             create_instance();
             create_surface();
+
             create_physical_device();
             create_logical_device();
-            
             create_swapchain();
             create_views();
             
@@ -863,7 +741,7 @@ public:
         logical_->acquireNextImageKHR(
             swapchain_.get(),
             UINT64_MAX,
-            image_available_[current_frame_].get(),
+            image_available_semaphore_[current_frame_].get(),
             nullptr, &image_index
         );
 
@@ -873,17 +751,17 @@ public:
             vk::PipelineStageFlagBits::eColorAttachmentOutput
         };
         vk::SubmitInfo submit_info(
-            1, &image_available_[current_frame_].get(),
+            1, &image_available_semaphore_[current_frame_].get(),
             wait_stages,
             1, &command_buffers_[image_index].get(),
-            1, &render_finished_[current_frame_].get()
+            1, &render_finished_semaphore_[current_frame_].get()
         );
         graphics_queue_.submit(submit_info, nullptr);
 
         // Present rendered image to the display!
         // After presenting, wait for next ready image
         vk::PresentInfoKHR present_info(
-            1, &render_finished_[current_frame_].get(),
+            1, &render_finished_semaphore_[current_frame_].get(),
             1, &swapchain_.get(),
             &image_index, nullptr
         );
@@ -894,35 +772,3 @@ public:
         current_frame_ %= max_frames_processing_;
     }
 };
-
-// Entry point
-// Simulates Dynamo's update pipeline
-int main(int argc, char **argv) {
-    SDL_Init(SDL_INIT_EVERYTHING);
-
-    // From Dynamo::Display module
-    int width = 640, height = 480;
-    SDL_Window *window = SDL_CreateWindow(
-        "Experimental Renderer",
-        SDL_WINDOWPOS_CENTERED,
-        SDL_WINDOWPOS_CENTERED,
-        width,
-        height,
-        SDL_WINDOW_VULKAN
-    );
-
-    // Instantiate Renderer class
-    Renderer renderer(window);
-
-    SDL_Event e;
-    bool running = true;
-    while(running) {
-        renderer.refresh();
-        while(SDL_PollEvent(&e) != 0) {
-            if(e.type == SDL_QUIT) {
-                running = false;
-            }
-        }
-    }
-    return 0;
-}
