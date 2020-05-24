@@ -84,6 +84,11 @@ class Renderer {
     std::vector<vk::UniqueSemaphore> image_available_semaphore_;
     std::vector<vk::UniqueSemaphore> render_finished_semaphore_;
 
+    // Fences
+    // Synchronizes between GPU and CPU processes
+    std::vector<vk::UniqueFence> wait_fences_;
+    std::vector<vk::Fence> active_images_;
+
     // Frame processing indices
     int max_frames_processing_;
     int current_frame_;
@@ -679,20 +684,29 @@ class Renderer {
         }
     }
 
-    // Initialize semaphores to synchronize command buffers
+    // Initialize semaphores and fences to synchronize command buffers
     // * Image available - Image is available for rendering (pre-rendering)
     // * Render finished - Image can be presented to display (post-rendering)
     void create_synchronizers() {
-        vk::SemaphoreCreateInfo create_info;
+        vk::SemaphoreCreateInfo semaphore_info;
+        vk::FenceCreateInfo fence_info(
+            vk::FenceCreateFlagBits::eSignaled
+        );
+
         image_available_semaphore_.resize(max_frames_processing_);
         render_finished_semaphore_.resize(max_frames_processing_);
+        wait_fences_.resize(max_frames_processing_);
+        active_images_.resize(images_.size(), nullptr);
 
         for(int i = 0; i < max_frames_processing_; i++) {
             image_available_semaphore_[i] = std::move(
-                logical_->createSemaphoreUnique(create_info)
+                logical_->createSemaphoreUnique(semaphore_info)
             );
             render_finished_semaphore_[i] = std::move(
-                logical_->createSemaphoreUnique(create_info)
+                logical_->createSemaphoreUnique(semaphore_info)
+            );
+            wait_fences_[i] = std::move(
+                logical_->createFenceUnique(fence_info)
             );
         }
     }
@@ -700,7 +714,7 @@ class Renderer {
 public:
     Renderer(SDL_Window *window) {
         window_ = window;
-        max_frames_processing_ = 2;
+        max_frames_processing_ = 3;
         current_frame_ = 0;
 
         // Perform all initialization steps
@@ -736,6 +750,11 @@ public:
 
     // Update the display
     void refresh() {
+        logical_->waitForFences(
+            1, &wait_fences_[current_frame_].get(), 
+            true, UINT64_MAX
+        );
+
         // Grab the next available image to render to
         uint32_t image_index;
         logical_->acquireNextImageKHR(
@@ -744,6 +763,15 @@ public:
             image_available_semaphore_[current_frame_].get(),
             nullptr, &image_index
         );
+
+        if(active_images_[image_index]) {
+            logical_->waitForFences(
+                1, &active_images_[image_index],
+                true, UINT64_MAX
+            );
+        }
+        active_images_[image_index] = wait_fences_[current_frame_].get();
+        logical_->resetFences(1, &wait_fences_[current_frame_].get());
 
         // Submit commands to the graphics queue
         // for rendering to that image
@@ -756,7 +784,10 @@ public:
             1, &command_buffers_[image_index].get(),
             1, &render_finished_semaphore_[current_frame_].get()
         );
-        graphics_queue_.submit(submit_info, nullptr);
+        graphics_queue_.submit(
+            submit_info, 
+            wait_fences_[current_frame_].get()
+        );
 
         // Present rendered image to the display!
         // After presenting, wait for next ready image
