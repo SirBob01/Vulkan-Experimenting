@@ -9,14 +9,25 @@ int main(int argc, char **argv) {
     SDL_Init(SDL_INIT_EVERYTHING);
 
     // From Dynamo::Display module
-    int width = 640, height = 480;
+    bool fullscreen = false;
+
+    SDL_DisplayMode native_res;
+    SDL_GetDesktopDisplayMode(0, &native_res);
+
+    auto flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
+    if(fullscreen) {
+        flags |= SDL_WINDOW_FULLSCREEN;
+    }
+    int width = fullscreen ? native_res.w : 640;
+    int height = fullscreen ? native_res.h : 480;
+
     SDL_Window *window = SDL_CreateWindow(
         "Experimental Renderer",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         width,
         height,
-        SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
+        flags
     );
 
     // Instantiate Renderer class
@@ -27,7 +38,7 @@ int main(int argc, char **argv) {
     while(running) {
         renderer.refresh();
         while(SDL_PollEvent(&e) != 0) {
-            if(e.type == SDL_QUIT) {
+            if(e.type == SDL_QUIT || e.type == SDL_KEYDOWN) {
                 running = false;
             }
         }
