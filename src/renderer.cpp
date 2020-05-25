@@ -1,5 +1,6 @@
 #include <vulkan/vulkan.hpp>
 #include <SDL2/SDL_vulkan.h>
+#include <glm/glm.hpp>
 
 #include <vector>
 
@@ -19,7 +20,39 @@
 
 using ShaderBytes = std::vector<char>; // Vulkan shader bytecode for parsing
 
+// TODO: Understand these methods
+struct RVertex {
+    // Interleaved vertex attributes
+    glm::vec2 pos;
+    glm::vec3 color;
+
+    static vk::VertexInputBindingDescription get_binding_description() {
+        vk::VertexInputBindingDescription desc(
+            0,              // Index in array of bindings
+            sizeof(RVertex)  // Stride (memory buffer traversal)
+        );
+        return desc;
+    }
+
+    static std::array<vk::VertexInputAttributeDescription, 2> get_attribute_descriptions() {
+        std::array<vk::VertexInputAttributeDescription, 2> desc;
+        desc[0] = {
+            0, 0, vk::Format::eR32G32Sfloat, offsetof(RVertex, pos)
+        };
+        desc[1] = {
+            1, 0, vk::Format::eR32G32B32Sfloat, offsetof(RVertex, color)
+        };
+        return desc;
+    }
+};
+
 class Renderer {
+    std::vector<RVertex> vertices_ = {
+        {{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
+        {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+        {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+    };
+
     SDL_Window *window_;
 
     // Required extensions and validation layers
@@ -62,6 +95,10 @@ class Renderer {
     // Command Queues (submitting commands)
     vk::Queue graphics_queue_;
     vk::Queue present_queue_;
+
+    // Vertex buffer
+    vk::UniqueBuffer vertex_buffer_;
+    vk::UniqueDeviceMemory vertex_buffer_memory_;
 
     // Semaphores
     // Ensures correct ordering between graphic and present commands
@@ -454,10 +491,15 @@ class Renderer {
 
         // Create the fixed function stages
         // Vertex input stage
-        // TODO: Modify this to use for vertex buffers
+        // TODO: Understand this
+        auto binding_description = RVertex::get_binding_description();
+        auto attribute_descriptions = RVertex::get_attribute_descriptions();
         vk::PipelineVertexInputStateCreateInfo vertex_input_info(
             vk::PipelineVertexInputStateCreateFlags(),
-            0, nullptr, 0, nullptr
+            1, 
+            &binding_description, 
+            attribute_descriptions.size(), 
+            &attribute_descriptions[0]
         );
 
         // Input assembly stage
@@ -605,6 +647,61 @@ class Renderer {
         }
     }
 
+    // Find the memory type for the physical device
+    // Ensure that it satisfies the required specs
+    uint32_t find_memory_type(uint32_t type_filter, 
+                              vk::MemoryPropertyFlags required) {
+        auto available = physical_->get_memory();
+        for(uint32_t i = 0; i < available.memoryTypeCount; i++) {
+            if((type_filter & (1 << i)) && 
+               (available.memoryTypes[i].propertyFlags & required)) {
+                return i;
+            }
+        }
+        throw std::runtime_error("Vulkan failed to find suitable memory type");
+    }
+
+    // Create the vertex buffer
+    // Send vertex information from CPU to GPU
+    void create_vertex_buffer() {
+        // Create the buffer
+        vk::BufferCreateInfo buffer_info(
+            vk::BufferCreateFlags(),
+            sizeof(vertices_[0]) * vertices_.size(),
+            vk::BufferUsageFlagBits::eVertexBuffer
+        );
+        vertex_buffer_ = logical_->createBufferUnique(buffer_info);
+
+        // Allocate memory to for the buffer
+        auto requirements = logical_->getBufferMemoryRequirements(
+            vertex_buffer_.get()
+        );
+        vk::MemoryAllocateInfo alloc_info(
+            requirements.size,
+            find_memory_type(
+                requirements.memoryTypeBits, 
+                vk::MemoryPropertyFlagBits::eHostVisible | 
+                vk::MemoryPropertyFlagBits::eHostCoherent
+            )
+        );
+        vertex_buffer_memory_ = logical_->allocateMemoryUnique(
+            alloc_info
+        );
+
+        // Copy the vertex data to VRAM
+        void *data = logical_->mapMemory(
+            vertex_buffer_memory_.get(), 0, 
+            buffer_info.size
+        );
+        memcpy(data, vertices_.data(), buffer_info.size);
+        logical_->unmapMemory(vertex_buffer_memory_.get());
+
+        // Bind the device memory to the vertex buffer
+        logical_->bindBufferMemory(
+            vertex_buffer_.get(), vertex_buffer_memory_.get(), 0
+        );
+    }
+
     // Create the command pool that manages buffer memory
     void create_command_pool() {
         vk::CommandPoolCreateInfo create_info(
@@ -619,7 +716,7 @@ class Renderer {
         vk::CommandBufferAllocateInfo alloc_info(
             command_pool_.get(),
             vk::CommandBufferLevel::ePrimary,
-            static_cast<uint32_t>(framebuffers_.size())
+            framebuffers_.size()
         );
         command_buffers_ = std::move(
             logical_->allocateCommandBuffersUnique(alloc_info)
@@ -659,9 +756,16 @@ class Renderer {
                 pipeline_.get()
             );
 
+            // Bind the vertex buffer
+            // TODO: Understand this
+            vk::DeviceSize offsets[] = {0};
+            command_buffers_[i]->bindVertexBuffers(
+                0, 1, &vertex_buffer_.get(), offsets
+            );
+
             // Submit the draw the triangle command!
             // Finally!!!
-            command_buffers_[i]->draw(3, 1, 0, 0);
+            command_buffers_[i]->draw(vertices_.size(), 1, 0, 0);
 
             // Stop recording
             command_buffers_[i]->endRenderPass();
@@ -720,7 +824,7 @@ class Renderer {
             
             create_render_pass();
             create_graphics_pipeline();
-            
+
             create_framebuffers();
             create_command_buffers();
             record_commands();
@@ -752,6 +856,7 @@ public:
             create_graphics_pipeline();
             
             create_framebuffers();
+            create_vertex_buffer();
             create_command_pool();
             create_command_buffers();
             record_commands();

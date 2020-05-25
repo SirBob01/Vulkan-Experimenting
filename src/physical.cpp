@@ -75,6 +75,10 @@ const std::vector<const char *> &PhysicalDevice::get_extensions() {
     return extensions_;
 }
 
+vk::PhysicalDeviceMemoryProperties PhysicalDevice::get_memory() {
+    return handle_.getMemoryProperties();
+}
+
 int PhysicalDevice::get_score() {
     auto properties = handle_.getProperties();
     auto features = handle_.getFeatures();

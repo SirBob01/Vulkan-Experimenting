@@ -50,6 +50,8 @@ public:
     // Get all extensions available to the device
     const std::vector<const char *> &get_extensions();
 
+    vk::PhysicalDeviceMemoryProperties get_memory();
+
     // Calculate the metric for GPU power
     int get_score();
 };
