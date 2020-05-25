@@ -46,11 +46,92 @@ struct RVertex {
     }
 };
 
+class RenderBuffer {
+    vk::Device logical_;
+    vk::UniqueBuffer handle_;
+    vk::UniqueDeviceMemory memory_;
+
+    size_t length_;
+
+    // Initialize the buffer handle
+    void initialize_buffer(vk::BufferUsageFlags usage) {
+        vk::BufferCreateInfo buffer_info(
+            vk::BufferCreateFlags(),
+            length_, usage
+        );
+        handle_ = logical_.createBufferUnique(buffer_info);
+    }
+
+    // Allocate memory in the GPU for the buffer
+    void allocate_memory(vk::MemoryPropertyFlags properties, 
+                         vk::PhysicalDeviceMemoryProperties available) {
+        auto requirements = logical_.getBufferMemoryRequirements(
+            handle_.get()
+        );
+
+        int memory_type = -1;
+        for(uint32_t i = 0; i < available.memoryTypeCount; i++) {
+            if((requirements.memoryTypeBits & (1 << i)) && 
+               (available.memoryTypes[i].propertyFlags & properties)) {
+                memory_type = i;
+                break;
+            }
+        }
+        if(memory_type < 0) {
+            throw std::runtime_error("Vulkan failed to create buffer");
+        }
+        vk::MemoryAllocateInfo alloc_info(
+            requirements.size,
+            memory_type
+        );
+        memory_ = logical_.allocateMemoryUnique(
+            alloc_info
+        );
+    }
+
+public:
+    RenderBuffer(vk::UniqueDevice &logical, size_t length, 
+                 vk::BufferUsageFlags usage, 
+                 vk::MemoryPropertyFlags properties,
+                 vk::PhysicalDeviceMemoryProperties device_spec) {
+        logical_ = logical.get();
+        length_ = length;
+
+        initialize_buffer(usage);
+        allocate_memory(properties, device_spec);
+
+        // Bind the device memory to the vertex buffer
+        logical_.bindBufferMemory(
+            handle_.get(), memory_.get(), 0
+        );
+    }
+
+    // Get the handle to the Vulkan buffer
+    vk::Buffer &get_handle() {
+        return handle_.get();
+    }
+
+    // Copy the data to VRAM
+    void copy(void *usr_data) {
+        void *bind = logical_.mapMemory(
+            memory_.get(), 0, 
+            length_
+        );
+        memcpy(bind, usr_data, length_);
+        logical_.unmapMemory(memory_.get());
+    }
+};
+
+
 class Renderer {
     std::vector<RVertex> vertices_ = {
-        {{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
-        {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+        {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+        {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+        {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+        {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+    };
+    std::vector<uint16_t> indices_ = {
+        0, 1, 2, 2, 3, 0
     };
 
     SDL_Window *window_;
@@ -96,9 +177,10 @@ class Renderer {
     vk::Queue graphics_queue_;
     vk::Queue present_queue_;
 
-    // Vertex buffer
-    vk::UniqueBuffer vertex_buffer_;
-    vk::UniqueDeviceMemory vertex_buffer_memory_;
+    // Data buffers
+    // Index buffer is so we can store indices to reuse vertices
+    std::unique_ptr<RenderBuffer> vertex_buffer_;
+    std::unique_ptr<RenderBuffer> index_buffer_; 
 
     // Semaphores
     // Ensures correct ordering between graphic and present commands
@@ -647,61 +729,6 @@ class Renderer {
         }
     }
 
-    // Find the memory type for the physical device
-    // Ensure that it satisfies the required specs
-    uint32_t find_memory_type(uint32_t type_filter, 
-                              vk::MemoryPropertyFlags required) {
-        auto available = physical_->get_memory();
-        for(uint32_t i = 0; i < available.memoryTypeCount; i++) {
-            if((type_filter & (1 << i)) && 
-               (available.memoryTypes[i].propertyFlags & required)) {
-                return i;
-            }
-        }
-        throw std::runtime_error("Vulkan failed to find suitable memory type");
-    }
-
-    // Create the vertex buffer
-    // Send vertex information from CPU to GPU
-    void create_vertex_buffer() {
-        // Create the buffer
-        vk::BufferCreateInfo buffer_info(
-            vk::BufferCreateFlags(),
-            sizeof(vertices_[0]) * vertices_.size(),
-            vk::BufferUsageFlagBits::eVertexBuffer
-        );
-        vertex_buffer_ = logical_->createBufferUnique(buffer_info);
-
-        // Allocate memory to for the buffer
-        auto requirements = logical_->getBufferMemoryRequirements(
-            vertex_buffer_.get()
-        );
-        vk::MemoryAllocateInfo alloc_info(
-            requirements.size,
-            find_memory_type(
-                requirements.memoryTypeBits, 
-                vk::MemoryPropertyFlagBits::eHostVisible | 
-                vk::MemoryPropertyFlagBits::eHostCoherent
-            )
-        );
-        vertex_buffer_memory_ = logical_->allocateMemoryUnique(
-            alloc_info
-        );
-
-        // Copy the vertex data to VRAM
-        void *data = logical_->mapMemory(
-            vertex_buffer_memory_.get(), 0, 
-            buffer_info.size
-        );
-        memcpy(data, vertices_.data(), buffer_info.size);
-        logical_->unmapMemory(vertex_buffer_memory_.get());
-
-        // Bind the device memory to the vertex buffer
-        logical_->bindBufferMemory(
-            vertex_buffer_.get(), vertex_buffer_memory_.get(), 0
-        );
-    }
-
     // Create the command pool that manages buffer memory
     void create_command_pool() {
         vk::CommandPoolCreateInfo create_info(
@@ -720,6 +747,95 @@ class Renderer {
         );
         command_buffers_ = std::move(
             logical_->allocateCommandBuffersUnique(alloc_info)
+        );
+    }
+
+    // Copy from data from one RenderBuffer to another
+    // Use for communicating GPU and CPU resources
+    void copy_buffer(RenderBuffer &src, RenderBuffer &dst, int size) {
+        // Create a command buffer for copying between data buffers
+        vk::CommandBufferAllocateInfo alloc_info(
+            command_pool_.get(),
+            vk::CommandBufferLevel::ePrimary,
+            1
+        );
+        auto copy_command = logical_->allocateCommandBuffersUnique(alloc_info);
+
+        vk::CommandBufferBeginInfo begin_info(
+            vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+        );
+
+        // Perform the copy
+        copy_command[0]->begin(begin_info);
+        vk::BufferCopy copy_region(0, 0, size);
+        copy_command[0]->copyBuffer(
+            src.get_handle(), dst.get_handle(), 
+            1, &copy_region
+        );
+        copy_command[0]->end();
+
+        // Submit the command to the graphics queue
+        vk::SubmitInfo submit_info(
+            0, nullptr, nullptr, 
+            1, &copy_command[0].get()
+        );
+        graphics_queue_.submit(submit_info, nullptr);
+        graphics_queue_.waitIdle();
+    }
+
+    // Create the vertex buffer
+    void create_vertex_buffer() {
+        int length = sizeof(vertices_[0]) * vertices_.size();
+        RenderBuffer staging_buffer(
+            logical_, length,
+            vk::BufferUsageFlagBits::eTransferSrc,            
+            vk::MemoryPropertyFlagBits::eHostVisible | 
+            vk::MemoryPropertyFlagBits::eHostCoherent,
+            physical_->get_memory()
+        );
+
+        staging_buffer.copy(&vertices_[0]);
+
+        vertex_buffer_ = std::make_unique<RenderBuffer>(
+            logical_, length,
+            vk::BufferUsageFlagBits::eVertexBuffer | 
+            vk::BufferUsageFlagBits::eTransferDst,
+            vk::MemoryPropertyFlagBits::eDeviceLocal,
+            physical_->get_memory()
+        );
+
+        copy_buffer(
+            staging_buffer,
+            *vertex_buffer_,
+            length
+        );
+    }
+
+    // Create the index buffer
+    void create_index_buffer() {
+        int length = sizeof(indices_[0]) * indices_.size();
+        RenderBuffer staging_buffer(
+            logical_, length,
+            vk::BufferUsageFlagBits::eTransferSrc,            
+            vk::MemoryPropertyFlagBits::eHostVisible | 
+            vk::MemoryPropertyFlagBits::eHostCoherent,
+            physical_->get_memory()
+        );
+
+        staging_buffer.copy(&indices_[0]);
+
+        index_buffer_ = std::make_unique<RenderBuffer>(
+            logical_, length,
+            vk::BufferUsageFlagBits::eIndexBuffer | 
+            vk::BufferUsageFlagBits::eTransferDst,
+            vk::MemoryPropertyFlagBits::eDeviceLocal,
+            physical_->get_memory()
+        );
+
+        copy_buffer(
+            staging_buffer,
+            *index_buffer_,
+            length
         );
     }
 
@@ -760,12 +876,15 @@ class Renderer {
             // TODO: Understand this
             vk::DeviceSize offsets[] = {0};
             command_buffers_[i]->bindVertexBuffers(
-                0, 1, &vertex_buffer_.get(), offsets
+                0, 1, &vertex_buffer_->get_handle(), offsets
+            );
+            command_buffers_[i]->bindIndexBuffer(
+                index_buffer_->get_handle(), 0, vk::IndexType::eUint16
             );
 
             // Submit the draw the triangle command!
             // Finally!!!
-            command_buffers_[i]->draw(vertices_.size(), 1, 0, 0);
+            command_buffers_[i]->drawIndexed(indices_.size(), 1, 0, 0, 0);
 
             // Stop recording
             command_buffers_[i]->endRenderPass();
@@ -838,7 +957,7 @@ class Renderer {
 public:
     Renderer(SDL_Window *window) {
         window_ = window;
-        max_frames_processing_ = 2;
+        max_frames_processing_ = 3;
         current_frame_ = 0;
 
         // Perform all initialization steps
@@ -856,9 +975,12 @@ public:
             create_graphics_pipeline();
             
             create_framebuffers();
-            create_vertex_buffer();
             create_command_pool();
             create_command_buffers();
+
+            create_vertex_buffer();
+            create_index_buffer();
+            
             record_commands();
 
             create_synchronizers();
