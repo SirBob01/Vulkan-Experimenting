@@ -37,21 +37,31 @@ struct RVertex {
     static std::array<vk::VertexInputAttributeDescription, 2> get_attribute_descriptions() {
         std::array<vk::VertexInputAttributeDescription, 2> desc;
         desc[0] = {
-            0, 0, vk::Format::eR32G32Sfloat, offsetof(RVertex, pos)
+            0, 0, 
+            vk::Format::eR32G32Sfloat, 
+            offsetof(RVertex, pos)   // Memory offset of position member
         };
         desc[1] = {
-            1, 0, vk::Format::eR32G32B32Sfloat, offsetof(RVertex, color)
+            1, 0, 
+            vk::Format::eR32G32B32Sfloat, 
+            offsetof(RVertex, color) // Memory offset of color member
         };
         return desc;
     }
 };
 
+// TODO: Create one large RenderBuffer
+//       Different types of data can be stored in offsets
+// Ex.   (meta_data | vertex_data | index_data | etc...)
 class RenderBuffer {
     vk::Device logical_;
     vk::UniqueBuffer handle_;
     vk::UniqueDeviceMemory memory_;
 
     size_t length_;
+
+    bool host_visible_;
+    void *bind_;
 
     // Initialize the buffer handle
     void initialize_buffer(vk::BufferUsageFlags usage) {
@@ -96,14 +106,31 @@ public:
                  vk::PhysicalDeviceMemoryProperties device_spec) {
         logical_ = logical.get();
         length_ = length;
+        host_visible_ = static_cast<bool>(
+            properties & vk::MemoryPropertyFlagBits::eHostVisible
+        );
 
         initialize_buffer(usage);
         allocate_memory(properties, device_spec);
 
-        // Bind the device memory to the vertex buffer
+        // Bind the device memory to the buffer
         logical_.bindBufferMemory(
             handle_.get(), memory_.get(), 0
         );
+
+        // Map and unmap ONLY once within buffer lifetime
+        if(host_visible_) {
+            bind_ = logical_.mapMemory(
+                memory_.get(), 0, 
+                length
+            );
+        }
+    }
+
+    ~RenderBuffer() {
+        if(host_visible_) {
+            logical_.unmapMemory(memory_.get());
+        }
     }
 
     // Get the handle to the Vulkan buffer
@@ -111,27 +138,31 @@ public:
         return handle_.get();
     }
 
-    // Copy the data to VRAM
-    void copy(void *usr_data) {
-        void *bind = logical_.mapMemory(
-            memory_.get(), 0, 
-            length_
-        );
-        memcpy(bind, usr_data, length_);
-        logical_.unmapMemory(memory_.get());
+    // Copy the data to the buffer
+    void copy(void *usr_data, int length) {
+        if(!host_visible_) {
+            throw std::runtime_error("Buffer is not host visible");
+        }
+        if(length > length_) {
+            throw std::runtime_error("Copied data larger than buffer size");
+        }
+        memcpy(bind_, usr_data, length);
     }
 };
 
 
 class Renderer {
     std::vector<RVertex> vertices_ = {
+        {{-0.2f, -0.2f}, {0.0f, 0.0f, 1.0f}},
+        {{-0.7f, -0.7f}, {1.0f, 0.0f, 0.0f}},
+        {{0.2f, -0.7f}, {0.0f, 1.0f, 0.0f}},
+
         {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
         {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-        {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+        {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
     };
     std::vector<uint16_t> indices_ = {
-        0, 1, 2, 2, 3, 0
+        0, 1, 2, 3, 4, 5
     };
 
     SDL_Window *window_;
@@ -172,15 +203,17 @@ class Renderer {
 
     // Command buffer (recording commands)
     std::vector<vk::UniqueCommandBuffer> command_buffers_;
+    vk::UniqueCommandBuffer copy_command_; // For copying
 
     // Command Queues (submitting commands)
     vk::Queue graphics_queue_;
     vk::Queue present_queue_;
 
     // Data buffers
-    // Index buffer is so we can store indices to reuse vertices
-    std::unique_ptr<RenderBuffer> vertex_buffer_;
-    std::unique_ptr<RenderBuffer> index_buffer_; 
+    // Object buffer is a one-size-fits-all for vertex and index data
+    std::unique_ptr<RenderBuffer> staging_buffer_;
+    std::unique_ptr<RenderBuffer> object_buffer_;
+    size_t buffer_size_, vertex_offset_;
 
     // Semaphores
     // Ensures correct ordering between graphic and present commands
@@ -189,8 +222,8 @@ class Renderer {
 
     // Fences
     // Synchronizes between GPU and CPU processes
-    std::vector<vk::UniqueFence> wait_fences_;
-    std::vector<vk::Fence> active_images_;
+    std::vector<vk::UniqueFence> fences_;
+    std::vector<vk::Fence> active_fences_;
 
     // Frame processing indices
     int max_frames_processing_;
@@ -550,6 +583,7 @@ class Renderer {
     // We can have multiple pipelines for different types of rendering
     // TODO: Figure out how to make other graphics pipelines
     //       This is specialized for triangle drawing.
+    //       Abstract this into its own class maybe?
     void create_graphics_pipeline() {
         // Load all required shaders
         auto vert = create_shader(load_shader("vert.spv")); // Vertex shader (transforms)
@@ -573,7 +607,7 @@ class Renderer {
 
         // Create the fixed function stages
         // Vertex input stage
-        // TODO: Understand this
+        // These describe the data that will be placed in the buffers
         auto binding_description = RVertex::get_binding_description();
         auto attribute_descriptions = RVertex::get_attribute_descriptions();
         vk::PipelineVertexInputStateCreateInfo vertex_input_info(
@@ -732,7 +766,7 @@ class Renderer {
     // Create the command pool that manages buffer memory
     void create_command_pool() {
         vk::CommandPoolCreateInfo create_info(
-            vk::CommandPoolCreateFlags(),
+            vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
             physical_->get_queue_families().graphics
         );
         command_pool_ = logical_->createCommandPoolUnique(create_info);
@@ -748,95 +782,73 @@ class Renderer {
         command_buffers_ = std::move(
             logical_->allocateCommandBuffersUnique(alloc_info)
         );
-    }
 
-    // Copy from data from one RenderBuffer to another
-    // Use for communicating GPU and CPU resources
-    void copy_buffer(RenderBuffer &src, RenderBuffer &dst, int size) {
         // Create a command buffer for copying between data buffers
-        vk::CommandBufferAllocateInfo alloc_info(
+        vk::CommandBufferAllocateInfo copy_alloc_info(
             command_pool_.get(),
             vk::CommandBufferLevel::ePrimary,
             1
         );
-        auto copy_command = logical_->allocateCommandBuffersUnique(alloc_info);
+        copy_command_ = std::move(
+            logical_->allocateCommandBuffersUnique(copy_alloc_info)[0]
+        );
+        staging_buffer_ = std::make_unique<RenderBuffer>(
+            logical_, buffer_size_,
+            vk::BufferUsageFlagBits::eTransferSrc,
+            vk::MemoryPropertyFlagBits::eHostVisible | 
+            vk::MemoryPropertyFlagBits::eHostCoherent,
+            physical_->get_memory()
+        );
+    }
 
+    // Copy from data from one RenderBuffer to another
+    // Use for communicating GPU and CPU resources
+    void copy_buffer(RenderBuffer &src, RenderBuffer &dst, 
+                     int src_offset, int dst_offset, int size) {
         vk::CommandBufferBeginInfo begin_info(
             vk::CommandBufferUsageFlagBits::eOneTimeSubmit
         );
 
         // Perform the copy
-        copy_command[0]->begin(begin_info);
-        vk::BufferCopy copy_region(0, 0, size);
-        copy_command[0]->copyBuffer(
+        copy_command_->begin(begin_info);
+        vk::BufferCopy copy_region(src_offset, dst_offset, size);
+        copy_command_->copyBuffer(
             src.get_handle(), dst.get_handle(), 
             1, &copy_region
         );
-        copy_command[0]->end();
+        copy_command_->end();
 
         // Submit the command to the graphics queue
         vk::SubmitInfo submit_info(
             0, nullptr, nullptr, 
-            1, &copy_command[0].get()
+            1, &copy_command_.get()
         );
         graphics_queue_.submit(submit_info, nullptr);
         graphics_queue_.waitIdle();
     }
 
-    // Create the vertex buffer
-    void create_vertex_buffer() {
-        int length = sizeof(vertices_[0]) * vertices_.size();
-        RenderBuffer staging_buffer(
-            logical_, length,
-            vk::BufferUsageFlagBits::eTransferSrc,            
-            vk::MemoryPropertyFlagBits::eHostVisible | 
-            vk::MemoryPropertyFlagBits::eHostCoherent,
-            physical_->get_memory()
-        );
-
-        staging_buffer.copy(&vertices_[0]);
-
-        vertex_buffer_ = std::make_unique<RenderBuffer>(
-            logical_, length,
-            vk::BufferUsageFlagBits::eVertexBuffer | 
-            vk::BufferUsageFlagBits::eTransferDst,
+    // Create the object buffer
+    void create_object_buffer() {
+        auto usage = vk::BufferUsageFlagBits::eIndexBuffer |
+                     vk::BufferUsageFlagBits::eVertexBuffer | 
+                     vk::BufferUsageFlagBits::eTransferDst;
+        object_buffer_ = std::make_unique<RenderBuffer>(
+            logical_, buffer_size_, usage,
             vk::MemoryPropertyFlagBits::eDeviceLocal,
             physical_->get_memory()
         );
 
-        copy_buffer(
-            staging_buffer,
-            *vertex_buffer_,
-            length
-        );
-    }
+        // Copy the index data
+        int index_len = sizeof(indices_[0]) * vertices_.size();
+        staging_buffer_->copy(&indices_[0], index_len);
 
-    // Create the index buffer
-    void create_index_buffer() {
-        int length = sizeof(indices_[0]) * indices_.size();
-        RenderBuffer staging_buffer(
-            logical_, length,
-            vk::BufferUsageFlagBits::eTransferSrc,            
-            vk::MemoryPropertyFlagBits::eHostVisible | 
-            vk::MemoryPropertyFlagBits::eHostCoherent,
-            physical_->get_memory()
-        );
+        copy_buffer(*staging_buffer_, *object_buffer_, 0, 0, index_len);
 
-        staging_buffer.copy(&indices_[0]);
+        // Copy the vertex data
+        int vertex_len = sizeof(vertices_[0]) * vertices_.size();
+        staging_buffer_->copy(&vertices_[0], vertex_len);
 
-        index_buffer_ = std::make_unique<RenderBuffer>(
-            logical_, length,
-            vk::BufferUsageFlagBits::eIndexBuffer | 
-            vk::BufferUsageFlagBits::eTransferDst,
-            vk::MemoryPropertyFlagBits::eDeviceLocal,
-            physical_->get_memory()
-        );
-
-        copy_buffer(
-            staging_buffer,
-            *index_buffer_,
-            length
-        );
+        copy_buffer(*staging_buffer_, *object_buffer_, 0, vertex_offset_, vertex_len);
     }
 
     // Begin recording commands from each buffer
@@ -872,14 +884,16 @@ class Renderer {
                 pipeline_.get()
             );
 
-            // Bind the vertex buffer
-            // TODO: Understand this
-            vk::DeviceSize offsets[] = {0};
+            // Bind the vertex and index sub-buffers to the command queue
+            vk::Buffer buffers[] = {
+                object_buffer_->get_handle()
+            };
+            vk::DeviceSize offsets[] = {vertex_offset_};
             command_buffers_[i]->bindVertexBuffers(
-                0, 1, &vertex_buffer_->get_handle(), offsets
+                0, 1, buffers, offsets
             );
             command_buffers_[i]->bindIndexBuffer(
-                index_buffer_->get_handle(), 0, vk::IndexType::eUint16
+                object_buffer_->get_handle(), 0, vk::IndexType::eUint16
             );
 
             // Submit the draw the triangle command!
@@ -895,7 +909,7 @@ class Renderer {
     // Initialize semaphores and fences to synchronize command buffers
     // * Image available - Image is available for rendering (pre-rendering)
     // * Render finished - Image can be presented to display (post-rendering)
-    // TODO: Understand purpose of various fence objects...???
+    // * Fences - Wait for submitted commands in queue to finish (basically waitIdle)
     void create_synchronizers() {
         vk::SemaphoreCreateInfo semaphore_info;
         vk::FenceCreateInfo fence_info(
@@ -904,8 +918,8 @@ class Renderer {
 
         image_available_semaphores_.resize(max_frames_processing_);
         render_finished_semaphores_.resize(max_frames_processing_);
-        wait_fences_.resize(max_frames_processing_);
-        active_images_.resize(images_.size());
+        fences_.resize(max_frames_processing_);
+        active_fences_.resize(images_.size());
 
         for(int i = 0; i < max_frames_processing_; i++) {
             image_available_semaphores_[i] = std::move(
@@ -914,7 +928,7 @@ class Renderer {
             render_finished_semaphores_[i] = std::move(
                 logical_->createSemaphoreUnique(semaphore_info)
             );
-            wait_fences_[i] = std::move(
+            fences_[i] = std::move(
                 logical_->createFenceUnique(fence_info)
             );
         }
@@ -958,6 +972,8 @@ public:
     Renderer(SDL_Window *window) {
         window_ = window;
         max_frames_processing_ = 3;
+        buffer_size_ = 134217728; // Initial buffer size (allocate large)
+        vertex_offset_ = 420;
         current_frame_ = 0;
 
         // Perform all initialization steps
@@ -978,8 +994,7 @@ public:
             create_command_pool();
             create_command_buffers();
 
-            create_vertex_buffer();
-            create_index_buffer();
+            create_object_buffer();
             
             record_commands();
 
@@ -992,6 +1007,7 @@ public:
     }
 
     ~Renderer() {
+        std::cout << framebuffers_.size();
         // Wait for logical device to finish all operations
         logical_->waitIdle();
     }
@@ -999,7 +1015,7 @@ public:
     // Update the display
     void refresh() {
         logical_->waitForFences(
-            1, &wait_fences_[current_frame_].get(), 
+            1, &fences_[current_frame_].get(), 
             true, UINT64_MAX
         );
 
@@ -1016,14 +1032,14 @@ public:
             return;
         }
 
-        if(active_images_[image_index]) {
+        if(active_fences_[image_index]) {
             logical_->waitForFences(
-                1, &active_images_[image_index],
+                1, &active_fences_[image_index],
                 true, UINT64_MAX
             );
         }
-        active_images_[image_index] = wait_fences_[current_frame_].get();
-        logical_->resetFences(1, &wait_fences_[current_frame_].get());
+        active_fences_[image_index] = fences_[current_frame_].get();
+        logical_->resetFences(1, &fences_[current_frame_].get());
 
         // Submit commands to the graphics queue
         // for rendering to that image
@@ -1038,7 +1054,7 @@ public:
         );
         graphics_queue_.submit(
             submit_info, 
-            wait_fences_[current_frame_].get()
+            fences_[current_frame_].get()
         );
 
         // Present rendered image to the display!
