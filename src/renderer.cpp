@@ -10,6 +10,7 @@
 #include <memory>
 
 #include "physical.h"
+#include "renderbuffer.h"
 #include "util.h"
 
 #ifndef NDEBUG
@@ -50,107 +51,7 @@ struct RVertex {
     }
 };
 
-// TODO: Create one large RenderBuffer
-//       Different types of data can be stored in offsets
-// Ex.   (meta_data | vertex_data | index_data | etc...)
-class RenderBuffer {
-    vk::Device logical_;
-    vk::UniqueBuffer handle_;
-    vk::UniqueDeviceMemory memory_;
-
-    size_t length_;
-
-    bool host_visible_;
-    void *bind_;
-
-    // Initialize the buffer handle
-    void initialize_buffer(vk::BufferUsageFlags usage) {
-        vk::BufferCreateInfo buffer_info(
-            vk::BufferCreateFlags(),
-            length_, usage
-        );
-        handle_ = logical_.createBufferUnique(buffer_info);
-    }
-
-    // Allocate memory in the GPU for the buffer
-    void allocate_memory(vk::MemoryPropertyFlags properties, 
-                         vk::PhysicalDeviceMemoryProperties available) {
-        auto requirements = logical_.getBufferMemoryRequirements(
-            handle_.get()
-        );
-
-        int memory_type = -1;
-        for(uint32_t i = 0; i < available.memoryTypeCount; i++) {
-            if((requirements.memoryTypeBits & (1 << i)) && 
-               (available.memoryTypes[i].propertyFlags & properties)) {
-                memory_type = i;
-                break;
-            }
-        }
-        if(memory_type < 0) {
-            throw std::runtime_error("Vulkan failed to create buffer");
-        }
-        vk::MemoryAllocateInfo alloc_info(
-            requirements.size,
-            memory_type
-        );
-        memory_ = logical_.allocateMemoryUnique(
-            alloc_info
-        );
-    }
-
-public:
-    RenderBuffer(vk::UniqueDevice &logical, size_t length, 
-                 vk::BufferUsageFlags usage, 
-                 vk::MemoryPropertyFlags properties,
-                 vk::PhysicalDeviceMemoryProperties device_spec) {
-        logical_ = logical.get();
-        length_ = length;
-        host_visible_ = static_cast<bool>(
-            properties & vk::MemoryPropertyFlagBits::eHostVisible
-        );
-
-        initialize_buffer(usage);
-        allocate_memory(properties, device_spec);
-
-        // Bind the device memory to the buffer
-        logical_.bindBufferMemory(
-            handle_.get(), memory_.get(), 0
-        );
-
-        // Map and unmap ONLY once within buffer lifetime
-        if(host_visible_) {
-            bind_ = logical_.mapMemory(
-                memory_.get(), 0, 
-                length
-            );
-        }
-    }
-
-    ~RenderBuffer() {
-        if(host_visible_) {
-            logical_.unmapMemory(memory_.get());
-        }
-    }
-
-    // Get the handle to the Vulkan buffer
-    vk::Buffer &get_handle() {
-        return handle_.get();
-    }
-
-    // Copy the data to the buffer
-    void copy(void *usr_data, int length) {
-        if(!host_visible_) {
-            throw std::runtime_error("Buffer is not host visible");
-        }
-        if(length > length_) {
-            throw std::runtime_error("Copied data larger than buffer size");
-        }
-        memcpy(bind_, usr_data, length);
-    }
-};
-
-
+// TODO: Implement better command buffer management
 class Renderer {
     std::vector<RVertex> vertices_ = {
         {{-0.2f, -0.2f}, {0.0f, 0.0f, 1.0f}},
@@ -763,7 +664,7 @@ class Renderer {
         }
     }
 
-    // Create the command pool that manages buffer memory
+    // Create the command pool that manages command buffer memory
     void create_command_pool() {
         vk::CommandPoolCreateInfo create_info(
             vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
@@ -784,6 +685,7 @@ class Renderer {
         );
 
         // Create a command buffer for copying between data buffers
+        // This is not attached to any pipeline stage or semaphores
         vk::CommandBufferAllocateInfo copy_alloc_info(
             command_pool_.get(),
             vk::CommandBufferLevel::ePrimary,
@@ -792,6 +694,8 @@ class Renderer {
         copy_command_ = std::move(
             logical_->allocateCommandBuffersUnique(copy_alloc_info)[0]
         );
+
+        // Create the staging buffer for CPU to GPU copies
         staging_buffer_ = std::make_unique<RenderBuffer>(
             logical_, buffer_size_,
             vk::BufferUsageFlagBits::eTransferSrc,
@@ -831,7 +735,8 @@ class Renderer {
     void create_object_buffer() {
         auto usage = vk::BufferUsageFlagBits::eIndexBuffer |
                      vk::BufferUsageFlagBits::eVertexBuffer | 
-                     vk::BufferUsageFlagBits::eTransferDst;
+                     vk::BufferUsageFlagBits::eTransferDst | 
+                     vk::BufferUsageFlagBits::eTransferSrc;
         object_buffer_ = std::make_unique<RenderBuffer>(
             logical_, buffer_size_, usage,
             vk::MemoryPropertyFlagBits::eDeviceLocal,
@@ -851,11 +756,34 @@ class Renderer {
         copy_buffer(*staging_buffer_, *object_buffer_, 0, vertex_offset_, vertex_len);
     }
 
-    // Begin recording commands from each buffer
+    // Double the size of the object buffer
+    void realloc_object_buffer() {
+        logical_->waitIdle();
+        auto usage = vk::BufferUsageFlagBits::eIndexBuffer |
+                     vk::BufferUsageFlagBits::eVertexBuffer | 
+                     vk::BufferUsageFlagBits::eTransferDst | 
+                     vk::BufferUsageFlagBits::eTransferSrc;
+        buffer_size_ *= 2;
+        auto new_buffer = std::make_unique<RenderBuffer>(
+            logical_, buffer_size_, usage,
+            vk::MemoryPropertyFlagBits::eDeviceLocal,
+            physical_->get_memory()
+        );
+        copy_buffer(
+            *object_buffer_, *new_buffer, 
+            0, 0, object_buffer_->get_length()
+        );
+        object_buffer_ = std::move(new_buffer);
+        record_commands(); // Make sure command buffers are updated
+    }
+
+    // Record the commands for each framebuffer
+    // This can be called whenever image specific stuff changes
+    // But don't call this too frequently for performance
     void record_commands() {
         // Begin recording commands
+        vk::CommandBufferBeginInfo begin_info;
         for(int i = 0; i < command_buffers_.size(); i++) {
-            vk::CommandBufferBeginInfo begin_info;
             command_buffers_[i]->begin(begin_info);
 
             // Basically, SDL_RenderClear() 
@@ -875,6 +803,8 @@ class Renderer {
 
                 // Render pass commands embedded on primary command buffer
                 // TODO: Use secondary buffers for multithreaded rendering
+                //       Secondary buffers are hidden from CPU but can be
+                //       called by primary command buffers
                 vk::SubpassContents::eInline
             );
 
@@ -896,8 +826,7 @@ class Renderer {
                 object_buffer_->get_handle(), 0, vk::IndexType::eUint16
             );
 
-            // Submit the draw the triangle command!
-            // Finally!!!
+            // Record the actual draw command!!!!
             command_buffers_[i]->drawIndexed(indices_.size(), 1, 0, 0, 0);
 
             // Stop recording
@@ -909,7 +838,7 @@ class Renderer {
     // Initialize semaphores and fences to synchronize command buffers
     // * Image available - Image is available for rendering (pre-rendering)
     // * Render finished - Image can be presented to display (post-rendering)
-    // * Fences - Wait for submitted commands in queue to finish (basically waitIdle)
+    // * Fences - Wait for queued commands to finish (basically waitIdle)
     void create_synchronizers() {
         vk::SemaphoreCreateInfo semaphore_info;
         vk::FenceCreateInfo fence_info(
@@ -1007,7 +936,6 @@ public:
     }
 
     ~Renderer() {
-        std::cout << framebuffers_.size();
         // Wait for logical device to finish all operations
         logical_->waitIdle();
     }

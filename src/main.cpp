@@ -38,7 +38,7 @@ int main(int argc, char **argv) {
     while(running) {
         renderer.refresh();
         while(SDL_PollEvent(&e) != 0) {
-            if(e.type == SDL_QUIT || e.type == SDL_KEYDOWN) {
+            if(e.type == SDL_QUIT) {
                 running = false;
             }
         }
