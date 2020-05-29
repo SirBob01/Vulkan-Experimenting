@@ -54,6 +54,7 @@ struct RVertex {
 };
 
 // TODO: Implement better command buffer management
+// Idea: Create classes of command pools (static/dynamic)
 class Renderer {
     std::vector<RVertex> vertices_ = {
         {{-0.2f, -0.2f}, {0.0f, 0.0f, 1.0f}},
@@ -882,7 +883,6 @@ class Renderer {
         }
 
         // Clear array objects
-        command_buffers_.clear();
         images_.clear();
         views_.clear();
         framebuffers_.clear();
@@ -897,7 +897,6 @@ class Renderer {
             create_graphics_pipeline();
 
             create_framebuffers();
-            create_command_buffers();
             record_commands();
         }
         catch(vk::SystemError &err) {
