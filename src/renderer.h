@@ -12,6 +12,7 @@
 
 #include "physical.h"
 #include "renderbuffer.h"
+#include "renderdebug.h"
 #include "util.h"
 
 #ifndef NDEBUG
@@ -72,6 +73,9 @@ class Renderer {
     // Required extensions and validation layers
     std::vector<const char *> extensions_;
     std::vector<const char *> layers_;
+
+    // Debug messenger extension
+    std::unique_ptr<RenderDebug> debugger_;
 
     // Instance of the Vulkan renderer
     vk::UniqueInstance instance_;
@@ -144,6 +148,7 @@ class Renderer {
 
         if(DEBUG) {
             layers_.push_back("VK_LAYER_KHRONOS_validation");
+            extensions_.push_back("VK_EXT_debug_utils");
             std::cerr << "Vulkan Extensions:\n";
             for(auto &extension : extensions_) {
                 std::cerr << "* " << extension << "\n";
@@ -174,7 +179,7 @@ class Renderer {
             VK_MAKE_VERSION(1, 0, 0),    // Application version
             "Dynamo-Engine",             // Engine name
             VK_MAKE_VERSION(1, 0, 0),    // Engine version
-            VK_MAKE_VERSION(1, 2, 135)   // Vulkan API version
+            VK_MAKE_VERSION(1, 1, 0)     // Vulkan API version
         );
 
         std::vector<vk::ValidationFeatureEnableEXT> layer_extensions = {
@@ -199,6 +204,11 @@ class Renderer {
             create_info.pNext = &features;        
         }
         instance_ = vk::createInstanceUnique(create_info);
+        if(DEBUG) {
+            debugger_ = std::make_unique<RenderDebug>(
+                instance_
+            );
+        }
     }
 
     // Attach the SDL_Window to a Vulkan surface
@@ -878,6 +888,7 @@ class Renderer {
         framebuffers_.clear();
 
         // Recreate swapchain and its dependents
+        swapchain_.reset();
         try {
             create_swapchain();
             create_views();
@@ -938,6 +949,7 @@ public:
     ~Renderer() {
         // Wait for logical device to finish all operations
         logical_->waitIdle();
+        debugger_.reset();
     }
 
     // Update the display
@@ -955,7 +967,8 @@ public:
             image_available_semaphores_[current_frame_].get(),
             nullptr, &image_index
         );
-        if(result == vk::Result::eErrorOutOfDateKHR) {
+        if(result == vk::Result::eSuboptimalKHR || 
+           result == vk::Result::eErrorOutOfDateKHR) {
             reset_swapchain();
             return;
         }

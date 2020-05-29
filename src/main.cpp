@@ -1,7 +1,5 @@
 #include <SDL2/SDL.h>
-#include <SDL2/SDL_vulkan.h>
-
-#include "renderer.cpp"
+#include "renderer.h"
 
 // Entry point
 // Simulates Dynamo's update pipeline
