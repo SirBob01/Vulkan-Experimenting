@@ -1,3 +1,4 @@
+#define VULKAN_HPP_TYPESAFE_CONVERSION
 #include <vulkan/vulkan.hpp>
 #include <SDL2/SDL_vulkan.h>
 #include <glm/glm.hpp>
@@ -129,6 +130,9 @@ class Renderer {
     // Frame processing indices
     int max_frames_processing_;
     int current_frame_;
+
+    // Clear value for viewport refresh
+    vk::ClearValue clear_value_;
 
     // Get all required Vulkan extensions from SDL
     void get_extensions() {
@@ -786,17 +790,11 @@ class Renderer {
         for(int i = 0; i < command_buffers_.size(); i++) {
             command_buffers_[i]->begin(begin_info);
 
-            // Basically, SDL_RenderClear() 
-            std::array<float, 4> black = {
-                0.0, 0.0, 0.0, 1.0
-            };
-            vk::ClearValue clear_value(black);
-
             vk::RenderPassBeginInfo render_begin_info(
                 render_pass_.get(),
                 framebuffers_[i].get(),
                 vk::Rect2D({0, 0}, image_extent_),
-                1, &clear_value
+                1, &clear_value_
             );
             command_buffers_[i]->beginRenderPass(
                 render_begin_info, 
@@ -905,6 +903,8 @@ public:
         vertex_offset_ = 420;
         current_frame_ = 0;
 
+        clear_value_.color.setFloat32({0, 0, 0, 1});
+
         // Perform all initialization steps
         try {
             get_extensions();
@@ -1004,5 +1004,12 @@ public:
 
         current_frame_++;
         current_frame_ %= max_frames_processing_;
+    }
+
+    void set_fill(int r, int g, int b, int a) {
+        clear_value_.color.setFloat32(
+            {r/255.0f, g/255.0f, b/255.0f, a/255.0f}
+        );
+        record_commands();
     }
 };

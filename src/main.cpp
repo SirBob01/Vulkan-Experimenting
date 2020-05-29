@@ -41,6 +41,9 @@ int main(int argc, char **argv) {
             if(e.type == SDL_QUIT) {
                 running = false;
             }
+            if(e.type == SDL_KEYDOWN) {
+                renderer.set_fill(255, 255, 255, 255);
+            }
         }
     }
     return 0;
