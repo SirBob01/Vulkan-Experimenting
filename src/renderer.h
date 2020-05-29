@@ -1,7 +1,11 @@
 #define VULKAN_HPP_TYPESAFE_CONVERSION
+#define GLM_FORCE_RADIANS
 #include <vulkan/vulkan.hpp>
 #include <SDL2/SDL_vulkan.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <chrono>
 
 #include <vector>
 
@@ -23,7 +27,6 @@
 
 using ShaderBytes = std::vector<char>; // Vulkan shader bytecode for parsing
 
-// TODO: Understand these methods
 struct RVertex {
     // Interleaved vertex attributes
     glm::vec2 pos;
@@ -51,6 +54,12 @@ struct RVertex {
         };
         return desc;
     }
+};
+
+struct UniformBufferObject {
+    alignas(16) glm::mat4 model;
+    alignas(16) glm::mat4 view;
+    alignas(16) glm::mat4 proj;
 };
 
 // TODO: Implement better command buffer management
@@ -97,6 +106,11 @@ class Renderer {
     vk::Extent2D image_extent_;
     vk::Format image_format_;
 
+    // Descriptor set
+    vk::UniqueDescriptorSetLayout descriptor_layout_;
+    vk::UniqueDescriptorPool descriptor_pool_;
+    std::vector<vk::UniqueDescriptorSet> descriptor_sets_;
+
     // Graphics pipeline
     vk::UniqueRenderPass render_pass_;
     vk::UniquePipelineLayout layout_;
@@ -121,6 +135,9 @@ class Renderer {
     std::unique_ptr<RenderBuffer> staging_buffer_;
     std::unique_ptr<RenderBuffer> object_buffer_;
     size_t buffer_size_, vertex_offset_;
+
+    // Uniform buffers
+    std::vector<std::unique_ptr<RenderBuffer>> uniform_buffers_;
 
     // Semaphores
     // Ensures correct ordering between graphic and present commands
@@ -420,6 +437,23 @@ class Renderer {
         }
     }
 
+    // Create the descriptor set layout
+    // TODO: Understand descriptor sets
+    void create_descriptor_layout() {
+        vk::DescriptorSetLayoutBinding binding(
+            0, vk::DescriptorType::eUniformBuffer, 1,
+            vk::ShaderStageFlagBits::eVertex
+        );
+
+        vk::DescriptorSetLayoutCreateInfo create_info(
+            vk::DescriptorSetLayoutCreateFlags(),
+            1, &binding
+        );
+        descriptor_layout_ = logical_->createDescriptorSetLayoutUnique(
+            create_info
+        );
+    }
+
     // Load the bytecode of shader modules
     ShaderBytes load_shader(std::string filename) {
         std::ifstream file(filename, std::ios::ate | std::ios::binary);
@@ -564,10 +598,10 @@ class Renderer {
             vk::PipelineRasterizationStateCreateFlags(),
             false, // Depth clamp enable (shadow maps)
             false, // Always set to false if we wanna draw
-            vk::PolygonMode::eFill,      // Fill, outline, or only points?
-            vk::CullModeFlagBits::eBack, // Cull the back (hidden) faces
-            vk::FrontFace::eClockwise,   // Order of reading vertices
-            false, 0.0f, 0.0f, 0.0f,     // Depth biases for (shadow maps)
+            vk::PolygonMode::eFill,           // Fill, outline, or only points?
+            vk::CullModeFlagBits::eBack,      // Cull the back (hidden) faces
+            vk::FrontFace::eCounterClockwise, // Order of reading vertices
+            false, 0.0f, 0.0f, 0.0f,          // Depth biases for (shadow maps)
             1.0f   // Line thickness
         );
 
@@ -632,7 +666,7 @@ class Renderer {
         // Define pipeline layout
         vk::PipelineLayoutCreateInfo layout_info(
             vk::PipelineLayoutCreateFlags(),
-            0, nullptr, 0, nullptr
+            1, &descriptor_layout_.get(), 0, nullptr
         );
         layout_ = logical_->createPipelineLayoutUnique(layout_info);
 
@@ -771,6 +805,23 @@ class Renderer {
         copy_buffer(*staging_buffer_, *object_buffer_, 0, vertex_offset_, vertex_len);
     }
 
+    // Create a uniform buffer per swapchain image
+    // TODO: Understand UBOs
+    void create_uniform_buffers() {
+        vk::DeviceSize buffer_size = sizeof(UniformBufferObject);
+        uniform_buffers_.reserve(images_.size());
+        for(int i = 0; i < uniform_buffers_.capacity(); i++) {
+            auto buffer = std::make_unique<RenderBuffer>(
+                logical_, buffer_size, 
+                vk::BufferUsageFlagBits::eUniformBuffer,
+                vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+                physical_->get_memory()
+            );
+            uniform_buffers_.push_back(std::move(buffer));
+        }
+    }
+
     // Double the size of the object buffer
     void realloc_object_buffer() {
         logical_->waitIdle();
@@ -790,6 +841,55 @@ class Renderer {
         );
         object_buffer_ = std::move(new_buffer);
         record_commands(); // Make sure command buffers are updated
+    }
+
+    // Create the descriptor pool
+    // TODO: Understand descriptor pools
+    void create_descriptor_pool() {
+        vk::DescriptorPoolSize size(
+            vk::DescriptorType::eUniformBuffer,
+            images_.size()
+        );
+
+        vk::DescriptorPoolCreateInfo create_info(
+            vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+            images_.size(),
+            1, &size
+        );
+        descriptor_pool_ = logical_->createDescriptorPoolUnique(
+            create_info
+        );
+    }
+
+    // Create the descriptor sets
+    // TODO: Understand this
+    void create_descriptor_sets() {
+        std::vector<vk::DescriptorSetLayout> layouts(
+            images_.size(), descriptor_layout_.get()
+        );
+        vk::DescriptorSetAllocateInfo alloc_info(
+            *descriptor_pool_,
+            layouts.size(),
+            &layouts[0]
+        );
+        descriptor_sets_ = logical_->allocateDescriptorSetsUnique(
+            alloc_info
+        );
+
+        for(int i = 0; i < images_.size(); i++) {
+            vk::DescriptorBufferInfo buffer_info(
+                uniform_buffers_[i]->get_handle(), 
+                0, sizeof(UniformBufferObject)
+            );
+            vk::WriteDescriptorSet write_info(
+                descriptor_sets_[i].get(),
+                0, 0, 1,
+                vk::DescriptorType::eUniformBuffer,
+                nullptr,
+                &buffer_info
+            );
+            logical_->updateDescriptorSets(1, &write_info, 0, nullptr);
+        }
     }
 
     // Record the commands for each framebuffer
@@ -834,6 +934,10 @@ class Renderer {
             command_buffers_[i]->bindIndexBuffer(
                 object_buffer_->get_handle(), 0, vk::IndexType::eUint16
             );
+            command_buffers_[i]->bindDescriptorSets(
+                vk::PipelineBindPoint::eGraphics, layout_.get(),
+                0, 1, &descriptor_sets_[i].get(), 0, nullptr
+            );
 
             // Record the actual draw command!!!!
             command_buffers_[i]->drawIndexed(indices_.size(), 1, 0, 0, 0);
@@ -872,6 +976,30 @@ class Renderer {
         }
     }
 
+    // Update a uniform buffer every frame
+    // TODO: Understand math behind UBOs... this breaks on screen minimize
+    // Is this faster than just updating vertex buffer directly?
+    void update_uniform_buffer(uint32_t image_index) {
+        static auto start_time = std::chrono::high_resolution_clock::now();
+        auto current_time = std::chrono::high_resolution_clock::now();
+        float time = std::chrono::duration<float, std::chrono::seconds::period>(
+            current_time - start_time
+        ).count();
+
+        UniformBufferObject ubo{};
+        ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), 
+                                glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), 
+                               glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.proj = glm::perspective(
+            glm::radians(45.0f), 
+            image_extent_.width / (float) image_extent_.height, 
+            1.0f, 10.0f);
+        ubo.proj[1][1] *= -1;
+
+        uniform_buffers_[image_index]->copy(&ubo, sizeof(ubo));
+    }
+
     // Reset the swapchain on changes in window size
     void reset_swapchain() {
         logical_->waitIdle();
@@ -886,6 +1014,8 @@ class Renderer {
         images_.clear();
         views_.clear();
         framebuffers_.clear();
+        uniform_buffers_.clear();
+        descriptor_sets_.clear();
 
         // Recreate swapchain and its dependents
         swapchain_.reset();
@@ -897,6 +1027,10 @@ class Renderer {
             create_graphics_pipeline();
 
             create_framebuffers();
+            create_uniform_buffers();
+
+            create_descriptor_sets();
+
             record_commands();
         }
         catch(vk::SystemError &err) {
@@ -926,6 +1060,7 @@ public:
             create_swapchain();
             create_views();
             
+            create_descriptor_layout();
             create_render_pass();
             create_graphics_pipeline();
             
@@ -934,6 +1069,10 @@ public:
             create_command_buffers();
 
             create_object_buffer();
+            create_uniform_buffers();
+
+            create_descriptor_pool();
+            create_descriptor_sets();
             
             record_commands();
 
@@ -971,6 +1110,7 @@ public:
             reset_swapchain();
             return;
         }
+        update_uniform_buffer(image_index);
 
         if(active_fences_[image_index]) {
             logical_->waitForFences(
