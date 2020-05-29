@@ -22,7 +22,10 @@ VKAPI_ATTR VkBool32 VKAPI_CALL RenderDebug::message_callback(
             VkDebugUtilsMessageTypeFlagsEXT type,
             VkDebugUtilsMessengerCallbackDataEXT const *data,
             void *user_data) {
-    std::cerr << "Validation message: " << data->pMessage << "\n";
+    std::cerr << "---- Debugger Warning ----" << "\n";
+    std::cerr << "Message name: " << data->pMessageIdName << "\n";
+    std::cerr << "Message ID: " << data->messageIdNumber << "\n";
+    std::cerr << data->pMessage << "\n\n";
     return false;
 }
 
