@@ -79,6 +79,10 @@ vk::PhysicalDeviceMemoryProperties PhysicalDevice::get_memory() {
     return handle_.getMemoryProperties();
 }
 
+vk::PhysicalDeviceLimits PhysicalDevice::get_limits() {
+    return handle_.getProperties().limits;
+}
+
 int PhysicalDevice::get_score() {
     auto properties = handle_.getProperties();
     auto features = handle_.getFeatures();

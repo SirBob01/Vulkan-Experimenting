@@ -15,6 +15,7 @@ struct SwapchainSupport {
     std::vector<vk::PresentModeKHR> presents;  // Presentation modes
 };
 
+// Wrapper class detailing the Vulkan physical device
 class PhysicalDevice {
     vk::PhysicalDevice handle_;
     vk::SurfaceKHR surface_;
@@ -51,7 +52,11 @@ public:
     // Get all extensions available to the device
     const std::vector<const char *> &get_extensions();
 
+    // Get the memory properties of the device
     vk::PhysicalDeviceMemoryProperties get_memory();
+
+    // Get the limit constants of the device
+    vk::PhysicalDeviceLimits get_limits();
 
     // Calculate the metric for GPU power
     int get_score();

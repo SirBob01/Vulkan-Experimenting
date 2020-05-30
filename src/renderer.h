@@ -134,10 +134,11 @@ class Renderer {
     // Object buffer is a one-size-fits-all for vertex and index data
     std::unique_ptr<RenderBuffer> staging_buffer_;
     std::unique_ptr<RenderBuffer> object_buffer_;
-    size_t buffer_size_, vertex_offset_;
+    SubBuffer index_subbuffer_, vertex_subbuffer_;
+    size_t buffer_size_;
 
     // Uniform buffers
-    std::vector<std::unique_ptr<RenderBuffer>> uniform_buffers_;
+    std::unique_ptr<RenderBuffer> uniform_buffer_;
 
     // Semaphores
     // Ensures correct ordering between graphic and present commands
@@ -746,7 +747,7 @@ class Renderer {
 
         // Create the staging buffer for CPU to GPU copies
         staging_buffer_ = std::make_unique<RenderBuffer>(
-            logical_, buffer_size_,
+            logical_.get(), buffer_size_,
             vk::BufferUsageFlagBits::eTransferSrc,
             vk::MemoryPropertyFlagBits::eHostVisible | 
             vk::MemoryPropertyFlagBits::eHostCoherent,
@@ -787,38 +788,50 @@ class Renderer {
                      vk::BufferUsageFlagBits::eTransferDst | 
                      vk::BufferUsageFlagBits::eTransferSrc;
         object_buffer_ = std::make_unique<RenderBuffer>(
-            logical_, buffer_size_, usage,
+            logical_.get(), buffer_size_, usage,
             vk::MemoryPropertyFlagBits::eDeviceLocal,
             physical_->get_memory()
         );
 
         // Copy the index data
         int index_len = sizeof(indices_[0]) * vertices_.size();
-        staging_buffer_->copy(&indices_[0], index_len);
+        staging_buffer_->copy_raw(&indices_[0], index_len, 0);
 
-        copy_buffer(*staging_buffer_, *object_buffer_, 0, 0, index_len);
+        index_subbuffer_ = object_buffer_->suballoc(1024);
+        copy_buffer(
+            *staging_buffer_, *object_buffer_, 
+            0, object_buffer_->get_offset(index_subbuffer_), index_len
+        );
 
         // Copy the vertex data
         int vertex_len = sizeof(vertices_[0]) * vertices_.size();
-        staging_buffer_->copy(&vertices_[0], vertex_len);
+        staging_buffer_->copy_raw(&vertices_[0], vertex_len, 0);
 
-        copy_buffer(*staging_buffer_, *object_buffer_, 0, vertex_offset_, vertex_len);
+        vertex_subbuffer_ = object_buffer_->suballoc(1024);
+        copy_buffer(
+            *staging_buffer_, *object_buffer_, 
+            0, object_buffer_->get_offset(vertex_subbuffer_), vertex_len
+        );
     }
 
     // Create a uniform buffer per swapchain image
     // TODO: Understand UBOs
-    void create_uniform_buffers() {
-        vk::DeviceSize buffer_size = sizeof(UniformBufferObject);
-        uniform_buffers_.reserve(images_.size());
-        for(int i = 0; i < uniform_buffers_.capacity(); i++) {
-            auto buffer = std::make_unique<RenderBuffer>(
-                logical_, buffer_size, 
-                vk::BufferUsageFlagBits::eUniformBuffer,
-                vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent,
-                physical_->get_memory()
-            );
-            uniform_buffers_.push_back(std::move(buffer));
+    void create_uniform_buffer() {
+        uniform_buffer_ = std::make_unique<RenderBuffer>(
+            logical_.get(), buffer_size_, 
+            vk::BufferUsageFlagBits::eUniformBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent,
+            physical_->get_memory()
+        );
+
+        // Ensure buffer offsets fit alignment requirements
+        size_t size = 0;
+        while(size < sizeof(UniformBufferObject)) {
+            size += physical_->get_limits().minUniformBufferOffsetAlignment;
+        }
+        for(int i = 0; i < images_.size(); i++) {
+            uniform_buffer_->suballoc(size);
         }
     }
 
@@ -831,7 +844,7 @@ class Renderer {
                      vk::BufferUsageFlagBits::eTransferSrc;
         buffer_size_ *= 2;
         auto new_buffer = std::make_unique<RenderBuffer>(
-            logical_, buffer_size_, usage,
+            logical_.get(), buffer_size_, usage,
             vk::MemoryPropertyFlagBits::eDeviceLocal,
             physical_->get_memory()
         );
@@ -876,10 +889,11 @@ class Renderer {
             alloc_info
         );
 
-        for(int i = 0; i < images_.size(); i++) {
+        size_t unit = sizeof(UniformBufferObject);
+        for(int i = 0; i < uniform_buffer_->get_subbuffer_count(); i++) {
             vk::DescriptorBufferInfo buffer_info(
-                uniform_buffers_[i]->get_handle(), 
-                0, sizeof(UniformBufferObject)
+                uniform_buffer_->get_handle(), 
+                uniform_buffer_->get_offset(i), unit
             );
             vk::WriteDescriptorSet write_info(
                 descriptor_sets_[i].get(),
@@ -927,12 +941,16 @@ class Renderer {
             vk::Buffer buffers[] = {
                 object_buffer_->get_handle()
             };
-            vk::DeviceSize offsets[] = {vertex_offset_};
+            vk::DeviceSize offsets[] = {
+                object_buffer_->get_offset(vertex_subbuffer_)
+            };
             command_buffers_[i]->bindVertexBuffers(
                 0, 1, buffers, offsets
             );
             command_buffers_[i]->bindIndexBuffer(
-                object_buffer_->get_handle(), 0, vk::IndexType::eUint16
+                object_buffer_->get_handle(), 
+                object_buffer_->get_offset(index_subbuffer_), 
+                vk::IndexType::eUint16
             );
             command_buffers_[i]->bindDescriptorSets(
                 vk::PipelineBindPoint::eGraphics, layout_.get(),
@@ -940,7 +958,10 @@ class Renderer {
             );
 
             // Record the actual draw command!!!!
-            command_buffers_[i]->drawIndexed(indices_.size(), 1, 0, 0, 0);
+            command_buffers_[i]->drawIndexed(
+                indices_.size(), 
+                1, 0, 0, 0
+            );
 
             // Stop recording
             command_buffers_[i]->endRenderPass();
@@ -997,7 +1018,8 @@ class Renderer {
             1.0f, 10.0f);
         ubo.proj[1][1] *= -1;
 
-        uniform_buffers_[image_index]->copy(&ubo, sizeof(ubo));
+        uniform_buffer_->clear(image_index);
+        uniform_buffer_->copy(image_index, &ubo, sizeof(ubo));
     }
 
     // Reset the swapchain on changes in window size
@@ -1014,7 +1036,6 @@ class Renderer {
         images_.clear();
         views_.clear();
         framebuffers_.clear();
-        uniform_buffers_.clear();
         descriptor_sets_.clear();
 
         // Recreate swapchain and its dependents
@@ -1027,7 +1048,7 @@ class Renderer {
             create_graphics_pipeline();
 
             create_framebuffers();
-            create_uniform_buffers();
+            create_uniform_buffer();
 
             create_descriptor_sets();
 
@@ -1044,7 +1065,6 @@ public:
         window_ = window;
         max_frames_processing_ = 3;
         buffer_size_ = 134217728; // Initial buffer size (allocate large)
-        vertex_offset_ = 420;
         current_frame_ = 0;
 
         clear_value_.color.setFloat32({0, 0, 0, 1});
@@ -1069,7 +1089,7 @@ public:
             create_command_buffers();
 
             create_object_buffer();
-            create_uniform_buffers();
+            create_uniform_buffer();
 
             create_descriptor_pool();
             create_descriptor_sets();
