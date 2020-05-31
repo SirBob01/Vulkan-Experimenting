@@ -4,15 +4,14 @@
 #include <vulkan/vulkan.hpp>
 
 #include <cstring>
-
+#include <iostream>
 #include "physical.h"
 
 // An integer handle to a SubBuffer in a buffer
 using SubBuffer = int;
 
 // Wrapper class for Vulkan buffer objects
-// TODO: Implement command buffer listeners?
-//       These command buffers re-record when the buffer changes
+// User is responsible for updating command buffer listeners
 class RenderBuffer {
     vk::Device logical_;
     PhysicalDevice &physical_;
@@ -44,6 +43,9 @@ class RenderBuffer {
     // Allocate memory in the GPU for the buffer
     void alloc_memory();
 
+    // Resize the entire buffer
+    void resize(size_t size);
+
     // Ensure that a given subbuffer is allocated
     void check_subbuffer(SubBuffer buffer);
 
@@ -58,7 +60,7 @@ public:
     ~RenderBuffer();
 
     // Get the length of the buffer
-    size_t get_length();
+    size_t get_size();
 
     // Get the handle to the Vulkan buffer
     vk::Buffer &get_handle();
@@ -77,9 +79,6 @@ public:
 
     // Suballocate at the end of the buffer and return the handle
     SubBuffer suballoc(size_t size);
-
-    // Resize the entire buffer
-    void resize(size_t size);
 
     // Re-suballocate a subbuffer
     // Adjusts internal offsets and shifts data

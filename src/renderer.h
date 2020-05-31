@@ -759,49 +759,20 @@ class Renderer {
         staging_buffer_->suballoc(buffer_size_);
     }
 
-    // Copy from data from one RenderBuffer to another
-    // Use for communicating GPU and CPU resources
-    // TODO: Move this to RenderBuffer
-    void copy_buffer(RenderBuffer &src, RenderBuffer &dst, 
-                     int src_offset, int dst_offset, int size) {
-        vk::CommandBufferBeginInfo begin_info(
-            vk::CommandBufferUsageFlagBits::eOneTimeSubmit
-        );
-
-        // Perform the copy
-        copy_command_->begin(begin_info);
-        vk::BufferCopy copy_region(src_offset, dst_offset, size);
-        copy_command_->copyBuffer(
-            src.get_handle(), dst.get_handle(), 
-            1, &copy_region
-        );
-        copy_command_->end();
-
-        // Submit the command to the graphics queue
-        vk::SubmitInfo submit_info(
-            0, nullptr, nullptr, 
-            1, &copy_command_.get()
-        );
-        graphics_queue_.submit(submit_info, nullptr);
-        graphics_queue_.waitIdle();
-    }
-
     // Create the object buffer
     void create_object_buffer() {
         auto usage = vk::BufferUsageFlagBits::eIndexBuffer |
-                     vk::BufferUsageFlagBits::eVertexBuffer | 
-                     vk::BufferUsageFlagBits::eTransferDst | 
-                     vk::BufferUsageFlagBits::eTransferSrc;
+                     vk::BufferUsageFlagBits::eVertexBuffer;
         object_buffer_ = std::make_unique<RenderBuffer>(
             buffer_size_, logical_.get(), *physical_,
             usage, vk::MemoryPropertyFlagBits::eDeviceLocal,
             copy_command_.get(), graphics_queue_
         );
-        index_subbuffer_ = object_buffer_->suballoc(4);
-        vertex_subbuffer_ = object_buffer_->suballoc(4);
 
         // Copy the index data
         int index_len = sizeof(indices_[0]) * vertices_.size();
+        index_subbuffer_ = object_buffer_->suballoc(index_len);
+
         staging_buffer_->copy_raw(&indices_[0], index_len, 0);
         staging_buffer_->copy_to(
             *object_buffer_, 
@@ -812,6 +783,8 @@ class Renderer {
 
         // Copy the vertex data
         int vertex_len = sizeof(vertices_[0]) * vertices_.size();
+        vertex_subbuffer_ = object_buffer_->suballoc(vertex_len);
+        
         staging_buffer_->copy_raw(&vertices_[0], vertex_len, 0);
         staging_buffer_->copy_to(
             *object_buffer_, 
@@ -840,28 +813,6 @@ class Renderer {
         for(int i = 0; i < images_.size(); i++) {
             uniform_buffer_->suballoc(size);
         }
-    }
-
-    // Double the size of the object buffer
-    // TODO: Move this to RenderBuffer
-    void realloc_object_buffer() {
-        logical_->waitIdle();
-        auto usage = vk::BufferUsageFlagBits::eIndexBuffer |
-                     vk::BufferUsageFlagBits::eVertexBuffer | 
-                     vk::BufferUsageFlagBits::eTransferDst | 
-                     vk::BufferUsageFlagBits::eTransferSrc;
-        buffer_size_ *= 2;
-        auto new_buffer = std::make_unique<RenderBuffer>(
-            buffer_size_, logical_.get(), *physical_, 
-            usage,vk::MemoryPropertyFlagBits::eDeviceLocal,
-            copy_command_.get(), graphics_queue_
-        );
-        copy_buffer(
-            *object_buffer_, *new_buffer, 
-            0, 0, object_buffer_->get_length()
-        );
-        object_buffer_ = std::move(new_buffer);
-        record_commands(); // Make sure command buffers are updated
     }
 
     // Create the descriptor pool
