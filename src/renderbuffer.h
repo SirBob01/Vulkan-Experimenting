@@ -44,7 +44,12 @@ class RenderBuffer {
     void alloc_memory();
 
     // Resize the entire buffer
+    // This is an expensive call, so allocate large upfront
     void resize(size_t size);
+
+    // Re-suballocate a subbuffer
+    // Adjusts internal offsets and shifts data
+    void resuballoc(SubBuffer buffer, size_t size);
 
     // Ensure that a given subbuffer is allocated
     void check_subbuffer(SubBuffer buffer);
@@ -80,10 +85,6 @@ public:
     // Suballocate at the end of the buffer and return the handle
     SubBuffer suballoc(size_t size);
 
-    // Re-suballocate a subbuffer
-    // Adjusts internal offsets and shifts data
-    void resuballoc(SubBuffer buffer, size_t size);
-
     // Clear the contents of a subbuffer
     void clear(SubBuffer buffer);
 
@@ -94,6 +95,7 @@ public:
     void copy_to(RenderBuffer &target, int length,
                  SubBuffer src, SubBuffer dst);
 
+    // Copy data to another RenderBuffers using raw offsets
     void copy_to_raw(RenderBuffer &target, int length,
                      int src_offset, int dst_offset);
 

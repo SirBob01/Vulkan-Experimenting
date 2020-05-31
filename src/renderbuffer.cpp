@@ -77,6 +77,45 @@ void RenderBuffer::alloc_memory() {
     );
 }
 
+void RenderBuffer::resuballoc(SubBuffer buffer, size_t size) {
+    check_subbuffer(buffer);
+    auto &buffer_data = subbuffers_[buffer];
+    size_t shift = size - buffer_data.size;
+    size_t temp_length = 0;
+    buffer_data.size = size;
+
+    // Copy data to temporary buffer
+    for(int i = buffer+1; i < subbuffers_.size(); i++) {
+        temp_length += subbuffers_[i].size;
+    }
+    std::unique_ptr<RenderBuffer> temp;
+    if(temp_length) {
+        temp = std::make_unique<RenderBuffer>(
+            length_, logical_, physical_, usage_, 
+            properties_, copier_, transfer_queue_
+        );
+        copy_to_raw(*temp, temp_length, subbuffers_[buffer].offset, 0);
+    }
+    for(int i = buffer+1; i < subbuffers_.size(); i++) {
+        subbuffers_[i].offset += shift;
+    }
+
+    // Check for realloc
+    auto &last = subbuffers_.back();
+    if(last.offset+last.size > length_) {
+        resize(last.offset+last.size);
+    }
+
+    // Refill data
+    if(temp_length) {
+        temp->copy_to_raw(
+            *this, temp_length, 
+            0, subbuffers_[buffer+1].offset
+        );    
+        temp.reset();
+    }
+}
+
 void RenderBuffer::check_subbuffer(SubBuffer buffer) {
     if(buffer >= subbuffers_.size()) {
         throw std::runtime_error("Invalid subbuffer index");
@@ -152,42 +191,6 @@ void RenderBuffer::resize(size_t size) {
     }
     // Copy data back
     temp.copy_to_raw(*this, temp.get_size(), 0, 0);
-}
-
-void RenderBuffer::resuballoc(SubBuffer buffer, size_t size) {
-    check_subbuffer(buffer);
-    auto &buffer_data = subbuffers_[buffer];
-    size_t shift = size - buffer_data.size;
-    size_t temp_length = 0;
-    buffer_data.size = size;
-
-    // Copy data to temporary buffer
-    for(int i = buffer+1; i < subbuffers_.size(); i++) {
-        temp_length += subbuffers_[i].size;
-    }
-    std::unique_ptr<RenderBuffer> temp;
-    if(temp_length) {
-        temp = std::make_unique<RenderBuffer>(
-            length_, logical_, physical_, usage_, 
-            properties_, copier_, transfer_queue_
-        );
-        copy_to_raw(*temp, temp_length, subbuffers_[buffer].offset, 0);
-    }
-    for(int i = buffer+1; i < subbuffers_.size(); i++) {
-        subbuffers_[i].offset += shift;
-    }
-
-    // Check for realloc
-    auto &last = subbuffers_.back();
-    if(last.offset+last.size > length_) {
-        resize(last.offset+last.size);
-    }
-
-    // Refill data
-    if(temp_length) {
-        temp->copy_to_raw(*this, temp_length, 0, subbuffers_[buffer+1].offset);    
-        temp.reset();
-    }
 }
 
 void RenderBuffer::clear(SubBuffer buffer) {
