@@ -770,7 +770,7 @@ class Renderer {
         );
 
         // Copy the index data
-        int index_len = sizeof(indices_[0]) * vertices_.size();
+        int index_len = sizeof(indices_[0]) * indices_.size();
         index_subbuffer_ = object_buffer_->suballoc(index_len);
 
         staging_buffer_->copy_raw(&indices_[0], index_len, 0);
