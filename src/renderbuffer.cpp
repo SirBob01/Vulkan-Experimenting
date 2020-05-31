@@ -84,35 +84,27 @@ void RenderBuffer::resuballoc(SubBuffer buffer, size_t size) {
     size_t temp_length = 0;
     buffer_data.size = size;
 
-    // Copy data to temporary buffer
+    // Shift all offsets
     for(int i = buffer+1; i < subbuffers_.size(); i++) {
         temp_length += subbuffers_[i].size;
-    }
-    std::unique_ptr<RenderBuffer> temp;
-    if(temp_length) {
-        temp = std::make_unique<RenderBuffer>(
-            length_, logical_, physical_, usage_, 
-            properties_, copier_, transfer_queue_
-        );
-        copy_to_raw(*temp, temp_length, subbuffers_[buffer].offset, 0);
-    }
-    for(int i = buffer+1; i < subbuffers_.size(); i++) {
         subbuffers_[i].offset += shift;
     }
-
     // Check for realloc
-    auto &last = subbuffers_.back();
+    auto last = subbuffers_.back();
     if(last.offset+last.size > length_) {
         resize(last.offset+last.size);
     }
-
-    // Refill data
+    // Perform the copying
     if(temp_length) {
-        temp->copy_to_raw(
+        RenderBuffer temp(
+            temp_length, logical_, physical_, usage_, 
+            properties_, copier_, transfer_queue_
+        );
+        copy_to_raw(temp, temp_length, subbuffers_[buffer].offset, 0);  
+        temp.copy_to_raw(
             *this, temp_length, 
             0, subbuffers_[buffer+1].offset
-        );    
-        temp.reset();
+        );      
     }
 }
 
@@ -157,7 +149,7 @@ SubBuffer RenderBuffer::suballoc(size_t size) {
         }
     }
     else {
-        auto &last = subbuffers_.back();
+        auto last = subbuffers_.back();
         subbuffers_.push_back({
             size, last.offset + last.size, 0
         });
