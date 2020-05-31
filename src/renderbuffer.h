@@ -1,20 +1,30 @@
+#ifndef RENDER_BUFFER_H_
+#define RENDER_BUFFER_H_
 #define VULKAN_HPP_TYPESAFE_CONVERSION
 #include <vulkan/vulkan.hpp>
 
 #include <cstring>
 
+#include "physical.h"
+
 // An integer handle to a SubBuffer in a buffer
-using SubBuffer = unsigned;
+using SubBuffer = int;
 
 // Wrapper class for Vulkan buffer objects
+// TODO: Implement command buffer listeners?
+//       These command buffers re-record when the buffer changes
 class RenderBuffer {
     vk::Device logical_;
+    PhysicalDevice &physical_;
+
     vk::UniqueBuffer handle_;
     vk::UniqueDeviceMemory memory_;
 
     vk::BufferUsageFlags usage_;
     vk::MemoryPropertyFlags properties_;
-    vk::PhysicalDeviceMemoryProperties device_spec_;
+
+    vk::CommandBuffer copier_;
+    vk::Queue transfer_queue_;
 
     size_t length_;
     bool host_visible_;
@@ -38,10 +48,13 @@ class RenderBuffer {
     void check_subbuffer(SubBuffer buffer);
 
 public:
-    RenderBuffer(vk::Device &logical, size_t length, 
+    RenderBuffer(size_t length,
+                 vk::Device &logical, 
+                 PhysicalDevice &physical,
                  vk::BufferUsageFlags usage, 
                  vk::MemoryPropertyFlags properties,
-                 vk::PhysicalDeviceMemoryProperties device_spec);
+                 vk::CommandBuffer &copier, 
+                 vk::Queue &transfer_queue);
     ~RenderBuffer();
 
     // Get the length of the buffer
@@ -65,6 +78,9 @@ public:
     // Suballocate at the end of the buffer and return the handle
     SubBuffer suballoc(size_t size);
 
+    // Resize the entire buffer
+    void resize(size_t size);
+
     // Re-suballocate a subbuffer
     // Adjusts internal offsets and shifts data
     void resuballoc(SubBuffer buffer, size_t size);
@@ -72,9 +88,18 @@ public:
     // Clear the contents of a subbuffer
     void clear(SubBuffer buffer);
 
-    // Copy data into a subbuffer
+    // Copy CPU data into a GPU subbuffer
     void copy(SubBuffer buffer, void *data, int length);
+    
+    // Copy data to another RenderBuffer
+    void copy_to(RenderBuffer &target, int length,
+                 SubBuffer src, SubBuffer dst);
 
-    // Raw copy data to the buffer without considering subbuffers
+    void copy_to_raw(RenderBuffer &target, int length,
+                     int src_offset, int dst_offset);
+
+    // Raw copy CPU data to the GPU buffer without considering subbuffers
     void copy_raw(void *data, int length, int offset);
 };
+
+#endif

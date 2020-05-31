@@ -1,3 +1,5 @@
+#ifndef RENDER_DEBUG_H_
+#define RENDER_DEBUG_H_
 #define VULKAN_HPP_TYPESAFE_CONVERSION
 #include <vulkan/vulkan.hpp>
 
@@ -36,3 +38,5 @@ class RenderDebug {
 public:
     RenderDebug(vk::UniqueInstance &instance);
 };
+
+#endif

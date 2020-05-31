@@ -1,3 +1,5 @@
+#ifndef PHYSICAL_H_
+#define PHYSICAL_H_
 #define VULKAN_HPP_TYPESAFE_CONVERSION
 #include <vulkan/vulkan.hpp>
 
@@ -61,3 +63,5 @@ public:
     // Calculate the metric for GPU power
     int get_score();
 };
+
+#endif

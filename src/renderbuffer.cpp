@@ -1,14 +1,19 @@
 #include "renderbuffer.h"
 
-RenderBuffer::RenderBuffer(vk::Device &logical, size_t length, 
+RenderBuffer::RenderBuffer(size_t length, 
+                           vk::Device &logical, 
+                           PhysicalDevice &physical,
                            vk::BufferUsageFlags usage, 
                            vk::MemoryPropertyFlags properties,
-                           vk::PhysicalDeviceMemoryProperties device_spec) {
+                           vk::CommandBuffer &copier, 
+                           vk::Queue &transfer_queue) : physical_(physical) {
     logical_ = logical;
     length_ = length;
     usage_ = usage;
     properties_ = properties;
-    device_spec_ = device_spec;
+
+    copier_ = copier;
+    transfer_queue_ = transfer_queue;
 
     host_visible_ = static_cast<bool>(
         properties_ & vk::MemoryPropertyFlagBits::eHostVisible
@@ -43,11 +48,11 @@ void RenderBuffer::alloc_memory() {
     auto requirements = logical_.getBufferMemoryRequirements(
         handle_.get()
     );
-
+    auto device_spec = physical_.get_memory();
     int memory_type = -1;
-    for(uint32_t i = 0; i < device_spec_.memoryTypeCount; i++) {
+    for(uint32_t i = 0; i < device_spec.memoryTypeCount; i++) {
         if((requirements.memoryTypeBits & (1 << i)) && 
-           (device_spec_.memoryTypes[i].propertyFlags & properties_)) {
+           (device_spec.memoryTypes[i].propertyFlags & properties_)) {
             memory_type = i;
             break;
         }
@@ -114,19 +119,43 @@ SubBuffer RenderBuffer::suballoc(size_t size) {
     return subbuffers_.size() - 1;
 }
 
-void RenderBuffer::resuballoc(SubBuffer buffer, size_t size) {
+void RenderBuffer::resize(size_t size) {
     // TODO
+}
+
+void RenderBuffer::resuballoc(SubBuffer buffer, size_t size) {
     check_subbuffer(buffer);
     auto &buffer_data = subbuffers_[buffer];
     size_t shift = size - buffer_data.size;
-    size_t total = 0;
-    // Only shift from index buffer+1 onward
-    // Algorithm:
-    // 1. Copy all data from subbuffers_[buffer+1] into a temporary buffer
-    // 2. Adjust subbuffers_[i].offset += shift
-    // 3. Refill buffer starting from subbuffers_[buffer+1].offset
+    size_t temp_length = 0;
+    buffer_data.size = size;
+
+    // Copy data to temporary buffer
+    for(int i = buffer+1; i < subbuffers_.size(); i++) {
+        temp_length += subbuffers_[i].size;
+    }
+    std::unique_ptr<RenderBuffer> temp;
+    if(temp_length) {
+        temp = std::make_unique<RenderBuffer>(
+            length_, logical_, physical_, usage_, 
+            properties_, copier_, transfer_queue_
+        );
+        copy_to_raw(*temp, temp_length, subbuffers_[buffer].offset, 0);
+    }
     for(int i = buffer+1; i < subbuffers_.size(); i++) {
         subbuffers_[i].offset += shift;
+    }
+
+    // Check for realloc
+    auto &last = subbuffers_.back();
+    if(last.offset+last.size > length_) {
+        resize(last.offset+last.size);
+    }
+
+    // Refill data
+    if(temp_length) {
+        temp->copy_to_raw(*this, temp_length, 0, subbuffers_[buffer+1].offset);    
+        temp.reset();
     }
 }
 
@@ -142,11 +171,56 @@ void RenderBuffer::copy(SubBuffer buffer, void *data, int length) {
         throw std::runtime_error("Buffer is not host visible");
     }
     if(length+buffer_data.filled > buffer_data.size) {
-        // TODO
-        //resuballoc(buffer, length+buffer_data.filled);
+        resuballoc(buffer, length+buffer_data.filled);
     }
     std::memcpy(bind_ + buffer_data.offset, data, length);
     buffer_data.filled += length;
+}
+
+void RenderBuffer::copy_to(RenderBuffer &target, int length,
+                           SubBuffer src, SubBuffer dst) {
+    check_subbuffer(src);
+    target.check_subbuffer(dst);
+
+    auto &src_buffer_data = subbuffers_[src];
+    auto &dst_buffer_data = target.subbuffers_[dst];
+    
+    if(length > src_buffer_data.size) {
+        throw std::runtime_error("SubBuffer copy length too large");
+    }
+    if(length+dst_buffer_data.filled > dst_buffer_data.size) {
+        target.resuballoc(dst, length+dst_buffer_data.filled);
+    }
+    copy_to_raw(
+        target, length, 
+        src_buffer_data.offset, 
+        dst_buffer_data.offset
+    );
+    dst_buffer_data.filled += length;
+}
+
+void RenderBuffer::copy_to_raw(RenderBuffer &target, int length,
+                               int src_offset, int dst_offset) {
+    vk::CommandBufferBeginInfo begin_info(
+        vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+    );
+
+    // Perform the copy
+    copier_.begin(begin_info);
+    vk::BufferCopy copy_region(src_offset, dst_offset, length);
+    copier_.copyBuffer(
+        get_handle(), target.get_handle(), 
+        1, &copy_region
+    );
+    copier_.end();
+
+    // Submit the command to the graphics queue
+    vk::SubmitInfo submit_info(
+        0, nullptr, nullptr, 
+        1, &copier_
+    );
+    transfer_queue_.submit(submit_info, nullptr);
+    transfer_queue_.waitIdle();
 }
 
 void RenderBuffer::copy_raw(void *data, int length, int offset) {

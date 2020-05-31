@@ -1,3 +1,5 @@
+#ifndef RENDERER_H_
+#define RENDERER_H_
 #define VULKAN_HPP_TYPESAFE_CONVERSION
 #define GLM_FORCE_RADIANS
 #include <vulkan/vulkan.hpp>
@@ -15,6 +17,7 @@
 #include <memory>
 
 #include "physical.h"
+#include "rendercommands.h"
 #include "renderbuffer.h"
 #include "renderdebug.h"
 #include "util.h"
@@ -142,8 +145,8 @@ class Renderer {
 
     // Semaphores
     // Ensures correct ordering between graphic and present commands
-    std::vector<vk::UniqueSemaphore> image_available_semaphores_;
-    std::vector<vk::UniqueSemaphore> render_finished_semaphores_;
+    std::vector<vk::UniqueSemaphore> image_available_signal_;
+    std::vector<vk::UniqueSemaphore> render_finished_signal_;
 
     // Fences
     // Synchronizes between GPU and CPU processes
@@ -165,7 +168,7 @@ class Renderer {
         extensions_.resize(count);
         SDL_Vulkan_GetInstanceExtensions(window_, &count, &extensions_[0]);
 
-        if(DEBUG) {
+        if constexpr(DEBUG) {
             layers_.push_back("VK_LAYER_KHRONOS_validation");
             extensions_.push_back("VK_EXT_debug_utils");
             std::cerr << "Vulkan Extensions:\n";
@@ -219,11 +222,11 @@ class Renderer {
             extensions_.size(),
             &extensions_[0]    // Required extensions
         );
-        if(DEBUG) {
+        if constexpr(DEBUG) {
             create_info.pNext = &features;        
         }
         instance_ = vk::createInstanceUnique(create_info);
-        if(DEBUG) {
+        if constexpr(DEBUG) {
             debugger_ = std::make_unique<RenderDebug>(
                 instance_
             );
@@ -245,7 +248,7 @@ class Renderer {
     // Choose the best available physical device
     void create_physical_device() {
         auto devices = instance_->enumeratePhysicalDevices();
-        if(DEBUG) {
+        if constexpr(DEBUG) {
             std::cerr << "Physical Devices:\n";
             for(auto &physical : devices) {
                 auto properties = physical.getProperties();
@@ -730,8 +733,8 @@ class Renderer {
             vk::CommandBufferLevel::ePrimary,
             framebuffers_.size()
         );
-        command_buffers_ = std::move(
-            logical_->allocateCommandBuffersUnique(alloc_info)
+        command_buffers_ = logical_->allocateCommandBuffersUnique(
+            alloc_info
         );
 
         // Create a command buffer for copying between data buffers
@@ -747,16 +750,18 @@ class Renderer {
 
         // Create the staging buffer for CPU to GPU copies
         staging_buffer_ = std::make_unique<RenderBuffer>(
-            logical_.get(), buffer_size_,
+            buffer_size_, logical_.get(), *physical_, 
             vk::BufferUsageFlagBits::eTransferSrc,
             vk::MemoryPropertyFlagBits::eHostVisible | 
             vk::MemoryPropertyFlagBits::eHostCoherent,
-            physical_->get_memory()
+            copy_command_.get(), graphics_queue_
         );
+        staging_buffer_->suballoc(buffer_size_);
     }
 
     // Copy from data from one RenderBuffer to another
     // Use for communicating GPU and CPU resources
+    // TODO: Move this to RenderBuffer
     void copy_buffer(RenderBuffer &src, RenderBuffer &dst, 
                      int src_offset, int dst_offset, int size) {
         vk::CommandBufferBeginInfo begin_info(
@@ -788,29 +793,31 @@ class Renderer {
                      vk::BufferUsageFlagBits::eTransferDst | 
                      vk::BufferUsageFlagBits::eTransferSrc;
         object_buffer_ = std::make_unique<RenderBuffer>(
-            logical_.get(), buffer_size_, usage,
-            vk::MemoryPropertyFlagBits::eDeviceLocal,
-            physical_->get_memory()
+            buffer_size_, logical_.get(), *physical_,
+            usage, vk::MemoryPropertyFlagBits::eDeviceLocal,
+            copy_command_.get(), graphics_queue_
         );
+        index_subbuffer_ = object_buffer_->suballoc(4);
+        vertex_subbuffer_ = object_buffer_->suballoc(4);
 
         // Copy the index data
         int index_len = sizeof(indices_[0]) * vertices_.size();
         staging_buffer_->copy_raw(&indices_[0], index_len, 0);
-
-        index_subbuffer_ = object_buffer_->suballoc(1024);
-        copy_buffer(
-            *staging_buffer_, *object_buffer_, 
-            0, object_buffer_->get_offset(index_subbuffer_), index_len
+        staging_buffer_->copy_to(
+            *object_buffer_, 
+            index_len, 
+            0, 
+            index_subbuffer_
         );
 
         // Copy the vertex data
         int vertex_len = sizeof(vertices_[0]) * vertices_.size();
         staging_buffer_->copy_raw(&vertices_[0], vertex_len, 0);
-
-        vertex_subbuffer_ = object_buffer_->suballoc(1024);
-        copy_buffer(
-            *staging_buffer_, *object_buffer_, 
-            0, object_buffer_->get_offset(vertex_subbuffer_), vertex_len
+        staging_buffer_->copy_to(
+            *object_buffer_, 
+            vertex_len, 
+            0, 
+            vertex_subbuffer_
         );
     }
 
@@ -818,11 +825,11 @@ class Renderer {
     // TODO: Understand UBOs
     void create_uniform_buffer() {
         uniform_buffer_ = std::make_unique<RenderBuffer>(
-            logical_.get(), buffer_size_, 
+            buffer_size_, logical_.get(), *physical_, 
             vk::BufferUsageFlagBits::eUniformBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible |
             vk::MemoryPropertyFlagBits::eHostCoherent,
-            physical_->get_memory()
+            copy_command_.get(), graphics_queue_
         );
 
         // Ensure buffer offsets fit alignment requirements
@@ -836,6 +843,7 @@ class Renderer {
     }
 
     // Double the size of the object buffer
+    // TODO: Move this to RenderBuffer
     void realloc_object_buffer() {
         logical_->waitIdle();
         auto usage = vk::BufferUsageFlagBits::eIndexBuffer |
@@ -844,9 +852,9 @@ class Renderer {
                      vk::BufferUsageFlagBits::eTransferSrc;
         buffer_size_ *= 2;
         auto new_buffer = std::make_unique<RenderBuffer>(
-            logical_.get(), buffer_size_, usage,
-            vk::MemoryPropertyFlagBits::eDeviceLocal,
-            physical_->get_memory()
+            buffer_size_, logical_.get(), *physical_, 
+            usage,vk::MemoryPropertyFlagBits::eDeviceLocal,
+            copy_command_.get(), graphics_queue_
         );
         copy_buffer(
             *object_buffer_, *new_buffer, 
@@ -959,7 +967,7 @@ class Renderer {
 
             // Record the actual draw command!!!!
             command_buffers_[i]->drawIndexed(
-                indices_.size(), 
+                object_buffer_->get_subfill(index_subbuffer_),
                 1, 0, 0, 0
             );
 
@@ -979,16 +987,16 @@ class Renderer {
             vk::FenceCreateFlagBits::eSignaled
         );
 
-        image_available_semaphores_.resize(max_frames_processing_);
-        render_finished_semaphores_.resize(max_frames_processing_);
+        image_available_signal_.resize(max_frames_processing_);
+        render_finished_signal_.resize(max_frames_processing_);
         fences_.resize(max_frames_processing_);
         active_fences_.resize(images_.size());
 
         for(int i = 0; i < max_frames_processing_; i++) {
-            image_available_semaphores_[i] = std::move(
+            image_available_signal_[i] = std::move(
                 logical_->createSemaphoreUnique(semaphore_info)
             );
-            render_finished_semaphores_[i] = std::move(
+            render_finished_signal_[i] = std::move(
                 logical_->createSemaphoreUnique(semaphore_info)
             );
             fences_[i] = std::move(
@@ -1036,7 +1044,6 @@ class Renderer {
         images_.clear();
         views_.clear();
         framebuffers_.clear();
-        descriptor_sets_.clear();
 
         // Recreate swapchain and its dependents
         swapchain_.reset();
@@ -1048,9 +1055,6 @@ class Renderer {
             create_graphics_pipeline();
 
             create_framebuffers();
-            create_uniform_buffer();
-
-            create_descriptor_sets();
 
             record_commands();
         }
@@ -1122,7 +1126,8 @@ public:
         vk::Result result = logical_->acquireNextImageKHR(
             swapchain_.get(),
             UINT64_MAX,
-            image_available_semaphores_[current_frame_].get(),
+            // Signal that a new frame is available
+            image_available_signal_[current_frame_].get(),
             nullptr, &image_index
         );
         if(result == vk::Result::eSuboptimalKHR || 
@@ -1147,10 +1152,12 @@ public:
             vk::PipelineStageFlagBits::eColorAttachmentOutput
         };
         vk::SubmitInfo submit_info(
-            1, &image_available_semaphores_[current_frame_].get(),
+            // Wait for the image to become available
+            1, &image_available_signal_[current_frame_].get(),
             wait_stages,
             1, &command_buffers_[image_index].get(),
-            1, &render_finished_semaphores_[current_frame_].get()
+            // Signal that rendering is finished and can be presented
+            1, &render_finished_signal_[current_frame_].get()
         );
         graphics_queue_.submit(
             submit_info, 
@@ -1160,7 +1167,8 @@ public:
         // Present rendered image to the display!
         // After presenting, wait for next ready image
         vk::PresentInfoKHR present_info(
-            1, &render_finished_semaphores_[current_frame_].get(),
+            // Wait for signal that the image is ready for presentation
+            1, &render_finished_signal_[current_frame_].get(),
             1, &swapchain_.get(),
             &image_index, nullptr
         );
@@ -1185,3 +1193,5 @@ public:
         record_commands();
     }
 };
+
+#endif
