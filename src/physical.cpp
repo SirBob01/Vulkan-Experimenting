@@ -11,9 +11,10 @@ PhysicalDevice::PhysicalDevice(vk::PhysicalDevice handle, vk::SurfaceKHR surface
 } 
 
 bool PhysicalDevice::is_complete() {
-    bool graphics = queue_families_.graphics >= 0;
-    bool presentation = queue_families_.present >= 0;
-    return graphics && presentation;
+    bool graphics = queues_.graphics.count;
+    bool presentation = queues_.present.count;
+    bool transfer = queues_.transfer.count;
+    return graphics && presentation && transfer;
 }
 
 bool PhysicalDevice::is_supporting_extensions() {
@@ -42,15 +43,31 @@ void PhysicalDevice::get_command_queues() {
     for(auto &family : families) {
         bool present_support = handle_.getSurfaceSupportKHR(i, surface_);
         if(present_support) {
-            queue_families_.present = i;
+            queues_.present.index = i;
+            queues_.present.count = family.queueCount;
         }
+        
         if(family.queueFlags & vk::QueueFlagBits::eGraphics) {
-            queue_families_.graphics = i;
+            // Dedicated graphics_queue
+            queues_.graphics.index = i;
+            queues_.graphics.count = family.queueCount;
+        }
+        else if(family.queueFlags & vk::QueueFlagBits::eTransfer) {
+            // Dedicated transfer queue
+            queues_.transfer.index = i;
+            queues_.transfer.count = family.queueCount;
         }
         if(is_complete()) {
             break;
         }
         i++;
+    }
+    // Use same queue if no available dedicated
+    if(!queues_.graphics.count) {
+        queues_.graphics = queues_.present;
+    }
+    if(!queues_.transfer.count) {
+        queues_.transfer = queues_.present;
     }
 }
 
@@ -58,8 +75,8 @@ vk::PhysicalDevice PhysicalDevice::get_handle() {
     return handle_;
 }  
 
-QueueFamilyIndices &PhysicalDevice::get_queue_families() {
-    return queue_families_;
+AvailableQueues &PhysicalDevice::get_available_queues() {
+    return queues_;
 }
 
 SwapchainSupport &PhysicalDevice::get_swapchain_support() {

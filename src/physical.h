@@ -6,9 +6,15 @@
 #include <vector>
 #include <set>
 
-struct QueueFamilyIndices {
-    int graphics = -1; // Graphics commands
-    int present = -1;  // Presentation commands
+struct QueueFamily {
+    uint32_t index = 0; // Family index
+    int count = 0;      // Number of queues available
+};
+
+struct AvailableQueues {
+    QueueFamily graphics; // Graphics commands
+    QueueFamily present;  // Presentation commands
+    QueueFamily transfer; // Buffer transfer commands
 };
 
 struct SwapchainSupport {
@@ -23,7 +29,7 @@ class PhysicalDevice {
     vk::SurfaceKHR surface_;
 
     SwapchainSupport swapchain_;
-    QueueFamilyIndices queue_families_; 
+    AvailableQueues queues_; 
     
     std::vector<const char *> extensions_;
 
@@ -46,7 +52,7 @@ public:
     vk::PhysicalDevice get_handle();
         
     // Get the queue families
-    QueueFamilyIndices &get_queue_families();
+    AvailableQueues &get_available_queues();
 
     // Query the swapchain options for the device
     SwapchainSupport &get_swapchain_support();

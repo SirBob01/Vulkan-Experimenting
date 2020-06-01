@@ -123,15 +123,18 @@ class Renderer {
     std::vector<vk::UniqueFramebuffer> framebuffers_;
 
     // Command pool (memory buffer for commands)
-    vk::UniqueCommandPool command_pool_;
+    vk::UniqueCommandPool graphics_pool_;
+    vk::UniqueCommandPool transfer_pool_;
 
     // Command buffer (recording commands)
     std::vector<vk::UniqueCommandBuffer> command_buffers_;
     vk::UniqueCommandBuffer copy_command_; // For copying
 
     // Command Queues (submitting commands)
+    AvailableQueues queues_;
     vk::Queue graphics_queue_;
     vk::Queue present_queue_;
+    vk::Queue transfer_queue_;
 
     // Data buffers
     // Object buffer is a one-size-fits-all for vertex and index data
@@ -273,21 +276,24 @@ class Renderer {
     // Create the logical device from the chosen physical device
     void create_logical_device() {
         auto physical_handle = physical_->get_handle();
-        auto queue_families = physical_->get_queue_families();
+        queues_ = physical_->get_available_queues();
 
-        std::set<int> unique_families = {
-            queue_families.graphics,
-            queue_families.present
+        auto cmp = [](QueueFamily a, QueueFamily b) { 
+            return a.index != b.index;
         };
+        std::set<QueueFamily, decltype(cmp)> unique_families(cmp);
+        unique_families.insert(queues_.graphics);
+        unique_families.insert(queues_.present);
+        unique_families.insert(queues_.transfer);
 
-        // This dictates the order of commands buffers performed
-        float priority = 0.0;
+        // Allocate queues
         std::vector<vk::DeviceQueueCreateInfo> queue_info;
         for(auto &family : unique_families) {
+            std::vector<float> priorities(family.count, 0.0f);
             vk::DeviceQueueCreateInfo info(
                 vk::DeviceQueueCreateFlags(),
-                queue_families.graphics,
-                1, &priority
+                family.index, family.count, 
+                &priorities[0]
             );
             queue_info.push_back(info);
         }
@@ -305,8 +311,15 @@ class Renderer {
         logical_ = physical_handle.createDeviceUnique(create_info);
         
         // Set up the device's command queues
-        graphics_queue_ = logical_->getQueue(queue_families.graphics, 0);
-        present_queue_  = logical_->getQueue(queue_families.present, 0);
+        graphics_queue_ = logical_->getQueue(
+            queues_.graphics.index, 0
+        );
+        present_queue_  = logical_->getQueue(
+            queues_.present.index, 1
+        );
+        transfer_queue_  = logical_->getQueue(
+            queues_.transfer.index, 0
+        );
     }
 
     // Get the extent of the swapchain (i.e., the dimensions of the view)
@@ -392,15 +405,20 @@ class Renderer {
             nullptr
         );
 
-        auto queue_families = physical_->get_queue_families();
-        uint32_t index_arr[] = {
-            static_cast<uint32_t>(queue_families.graphics),
-            static_cast<uint32_t>(queue_families.present)
+        // Allow multiple queues to access buffers/images concurrently
+        std::vector<uint32_t> index_arr = {
+            queues_.present.index
         };
-        if(queue_families.graphics != queue_families.present) {
+        if(queues_.present.index != queues_.graphics.index) {
+            index_arr.push_back(queues_.graphics.index);
+        }
+        if(queues_.present.index != queues_.transfer.index) {
+            index_arr.push_back(queues_.transfer.index);
+        }
+        if(index_arr.size() > 1) {
             create_info.imageSharingMode = vk::SharingMode::eConcurrent;
-            create_info.queueFamilyIndexCount = 2;
-            create_info.pQueueFamilyIndices = index_arr;
+            create_info.queueFamilyIndexCount = index_arr.size();
+            create_info.pQueueFamilyIndices = &index_arr[0];
         }
 
         swapchain_ = logical_->createSwapchainKHRUnique(create_info);
@@ -717,19 +735,28 @@ class Renderer {
         }
     }
 
-    // Create the command pool that manages command buffer memory
+    // Create the command pools that manage command buffers
+    // for each device queue family
     void create_command_pool() {
-        vk::CommandPoolCreateInfo create_info(
-            vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-            physical_->get_queue_families().graphics
+        // Commands for the graphics queue
+        vk::CommandPoolCreateInfo graphics_info(
+            vk::CommandPoolCreateFlags(),
+            queues_.graphics.index
         );
-        command_pool_ = logical_->createCommandPoolUnique(create_info);
+        graphics_pool_ = logical_->createCommandPoolUnique(graphics_info);
+
+        // Commands for the transfer queue
+        vk::CommandPoolCreateInfo transfer_info(
+            vk::CommandPoolCreateFlags(),
+            queues_.transfer.index
+        );
+        transfer_pool_ = logical_->createCommandPoolUnique(transfer_info);
     }
 
     // Allocate buffers for submitting commands
     void create_command_buffers() {
         vk::CommandBufferAllocateInfo alloc_info(
-            command_pool_.get(),
+            graphics_pool_.get(),
             vk::CommandBufferLevel::ePrimary,
             framebuffers_.size()
         );
@@ -740,7 +767,7 @@ class Renderer {
         // Create a command buffer for copying between data buffers
         // This is not attached to any pipeline stage or semaphores
         vk::CommandBufferAllocateInfo copy_alloc_info(
-            command_pool_.get(),
+            transfer_pool_.get(),
             vk::CommandBufferLevel::ePrimary,
             1
         );
@@ -753,8 +780,9 @@ class Renderer {
             buffer_size_, logical_.get(), *physical_, 
             vk::BufferUsageFlagBits::eTransferSrc,
             vk::MemoryPropertyFlagBits::eHostVisible | 
-            vk::MemoryPropertyFlagBits::eHostCoherent,
-            copy_command_.get(), graphics_queue_
+            vk::MemoryPropertyFlagBits::eHostCoherent |
+            vk::MemoryPropertyFlagBits::eHostCached,
+            copy_command_.get(), transfer_queue_
         );
         staging_buffer_->suballoc(buffer_size_);
     }
@@ -766,7 +794,7 @@ class Renderer {
         object_buffer_ = std::make_unique<RenderBuffer>(
             buffer_size_, logical_.get(), *physical_,
             usage, vk::MemoryPropertyFlagBits::eDeviceLocal,
-            copy_command_.get(), graphics_queue_
+            copy_command_.get(), transfer_queue_
         );
 
         // Copy the index data
@@ -801,8 +829,9 @@ class Renderer {
             buffer_size_, logical_.get(), *physical_, 
             vk::BufferUsageFlagBits::eUniformBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible |
-            vk::MemoryPropertyFlagBits::eHostCoherent,
-            copy_command_.get(), graphics_queue_
+            vk::MemoryPropertyFlagBits::eHostCoherent |
+            vk::MemoryPropertyFlagBits::eHostCached,
+            copy_command_.get(), transfer_queue_
         );
 
         // Ensure buffer offsets fit alignment requirements
@@ -986,7 +1015,8 @@ class Renderer {
         logical_->waitIdle();
 
         // Handle minimized window (special case)
-        int width = 0, height = 0;
+        int width, height;
+        SDL_Vulkan_GetDrawableSize(window_, &width, &height);
         while(!width || !height) {
             SDL_Vulkan_GetDrawableSize(window_, &width, &height);
         }
