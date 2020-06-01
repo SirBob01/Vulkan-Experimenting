@@ -82,6 +82,10 @@ public:
     // Get the size of a subbuffer
     size_t get_subsize(SubBuffer buffer);
 
+    // Get the pointer to mapped data
+    // Use this to read from GPU buffer
+    char *get_mapped();
+
     // Suballocate at the end of the buffer and return the handle
     SubBuffer suballoc(size_t size);
 

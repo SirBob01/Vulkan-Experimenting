@@ -141,6 +141,13 @@ size_t RenderBuffer::get_subsize(SubBuffer buffer) {
     return subbuffers_[buffer].size;
 }
 
+char *RenderBuffer::get_mapped() {
+    if(host_visible_) {
+        return bind_;
+    }
+    return nullptr;
+}
+
 SubBuffer RenderBuffer::suballoc(size_t size) {
     if(subbuffers_.empty()) {
         subbuffers_.push_back({size, 0, 0});
@@ -199,7 +206,11 @@ void RenderBuffer::copy(SubBuffer buffer, void *data, int length) {
     if(length+buffer_data.filled > buffer_data.size) {
         resuballoc(buffer, length+buffer_data.filled);
     }
-    std::memcpy(bind_ + buffer_data.offset, data, length);
+    std::memcpy(
+        bind_ + buffer_data.offset + buffer_data.filled, 
+        data, 
+        length
+    );
     buffer_data.filled += length;
 }
 
@@ -217,7 +228,7 @@ void RenderBuffer::copy_to(RenderBuffer &target, int length,
     copy_to_raw(
         target, length, 
         src_buffer_data.offset, 
-        dst_buffer_data.offset
+        dst_buffer_data.offset + dst_buffer_data.filled
     );
     dst_buffer_data.filled += length;
 }
