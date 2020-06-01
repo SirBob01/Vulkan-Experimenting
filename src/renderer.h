@@ -127,7 +127,7 @@ class Renderer {
     vk::UniqueCommandPool transfer_pool_;
 
     // Command buffer (recording commands)
-    std::vector<vk::UniqueCommandBuffer> command_buffers_;
+    std::vector<vk::UniqueCommandBuffer> graphics_commands_;
     vk::UniqueCommandBuffer copy_command_; // For copying
 
     // Command Queues (submitting commands)
@@ -310,12 +310,12 @@ class Renderer {
         );
         logical_ = physical_handle.createDeviceUnique(create_info);
         
-        // Set up the device's command queues
+        // Grab device queue handles
         graphics_queue_ = logical_->getQueue(
             queues_.graphics.index, 0
         );
         present_queue_  = logical_->getQueue(
-            queues_.present.index, 1
+            queues_.present.index, 0
         );
         transfer_queue_  = logical_->getQueue(
             queues_.transfer.index, 0
@@ -747,7 +747,7 @@ class Renderer {
 
         // Commands for the transfer queue
         vk::CommandPoolCreateInfo transfer_info(
-            vk::CommandPoolCreateFlags(),
+            vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
             queues_.transfer.index
         );
         transfer_pool_ = logical_->createCommandPoolUnique(transfer_info);
@@ -760,7 +760,7 @@ class Renderer {
             vk::CommandBufferLevel::ePrimary,
             framebuffers_.size()
         );
-        command_buffers_ = logical_->allocateCommandBuffersUnique(
+        graphics_commands_ = logical_->allocateCommandBuffersUnique(
             alloc_info
         );
 
@@ -898,10 +898,17 @@ class Renderer {
     // This can be called whenever image specific stuff changes
     // But don't call this too frequently for performance
     void record_commands() {
+        // Wait for all queues using pool before resetting
+        graphics_queue_.waitIdle();
+        logical_->resetCommandPool(
+            graphics_pool_.get(),
+            vk::CommandPoolResetFlagBits::eReleaseResources
+        );
+
         // Begin recording commands
         vk::CommandBufferBeginInfo begin_info;
-        for(int i = 0; i < command_buffers_.size(); i++) {
-            command_buffers_[i]->begin(begin_info);
+        for(int i = 0; i < graphics_commands_.size(); i++) {
+            graphics_commands_[i]->begin(begin_info);
 
             vk::RenderPassBeginInfo render_begin_info(
                 render_pass_.get(),
@@ -909,7 +916,7 @@ class Renderer {
                 vk::Rect2D({0, 0}, image_extent_),
                 1, &clear_value_
             );
-            command_buffers_[i]->beginRenderPass(
+            graphics_commands_[i]->beginRenderPass(
                 render_begin_info, 
 
                 // Render pass commands embedded on primary command buffer
@@ -920,7 +927,7 @@ class Renderer {
             );
 
             // Bind the buffer to the graphics pipeline
-            command_buffers_[i]->bindPipeline(
+            graphics_commands_[i]->bindPipeline(
                 vk::PipelineBindPoint::eGraphics,
                 pipeline_.get()
             );
@@ -932,28 +939,28 @@ class Renderer {
             vk::DeviceSize offsets[] = {
                 object_buffer_->get_offset(vertex_subbuffer_)
             };
-            command_buffers_[i]->bindVertexBuffers(
+            graphics_commands_[i]->bindVertexBuffers(
                 0, 1, buffers, offsets
             );
-            command_buffers_[i]->bindIndexBuffer(
+            graphics_commands_[i]->bindIndexBuffer(
                 object_buffer_->get_handle(), 
                 object_buffer_->get_offset(index_subbuffer_), 
                 vk::IndexType::eUint16
             );
-            command_buffers_[i]->bindDescriptorSets(
+            graphics_commands_[i]->bindDescriptorSets(
                 vk::PipelineBindPoint::eGraphics, layout_.get(),
                 0, 1, &descriptor_sets_[i].get(), 0, nullptr
             );
 
             // Record the actual draw command!!!!
-            command_buffers_[i]->drawIndexed(
+            graphics_commands_[i]->drawIndexed(
                 object_buffer_->get_subfill(index_subbuffer_),
                 1, 0, 0, 0
             );
 
             // Stop recording
-            command_buffers_[i]->endRenderPass();
-            command_buffers_[i]->end();
+            graphics_commands_[i]->endRenderPass();
+            graphics_commands_[i]->end();
         }
     }
 
@@ -1136,7 +1143,7 @@ public:
             // Wait for the image to become available
             1, &image_available_signal_[current_frame_].get(),
             wait_stages,
-            1, &command_buffers_[image_index].get(),
+            1, &graphics_commands_[image_index].get(),
             // Signal that rendering is finished and can be presented
             1, &render_finished_signal_[current_frame_].get()
         );
