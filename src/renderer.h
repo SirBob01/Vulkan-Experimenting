@@ -798,7 +798,7 @@ class Renderer {
         int vertex_len = sizeof(vertices_[0]) * vertices_.size();
 
 
-        index_subbuffer_ = object_buffer_->suballoc(buffer_size_);
+        index_subbuffer_ = object_buffer_->suballoc(index_len);
         staging_buffer_->clear(0);
         staging_buffer_->copy(0, &indices_[0], index_len);
         staging_buffer_->copy_buffer(
@@ -809,7 +809,7 @@ class Renderer {
         );    
         
         // Copy the vertex data
-        vertex_subbuffer_ = object_buffer_->suballoc(buffer_size_);
+        vertex_subbuffer_ = object_buffer_->suballoc(vertex_len);
         staging_buffer_->clear(0);
         staging_buffer_->copy(0, &vertices_[0], vertex_len);
         staging_buffer_->copy_buffer(
@@ -1054,7 +1054,7 @@ public:
     Renderer(SDL_Window *window) {
         window_ = window;
         max_frames_processing_ = 3;
-        buffer_size_ = 2; // Initial buffer size (allocate large)
+        buffer_size_ = 1048576; // Initial buffer size (allocate large)
         current_frame_ = 0;
 
         clear_value_.color.setFloat32({0, 0, 0, 1});

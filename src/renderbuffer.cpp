@@ -41,6 +41,8 @@ RenderBuffer::~RenderBuffer() {
     if(host_visible_) {
         logical_.unmapMemory(memory_.get());
     }
+    handle_.reset();
+    memory_.reset();
 }
 
 void RenderBuffer::initialize_buffer() {
