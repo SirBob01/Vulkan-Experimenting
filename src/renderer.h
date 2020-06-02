@@ -807,7 +807,7 @@ class Renderer {
             0, 
             index_subbuffer_
         );    
-        
+
         // Copy the vertex data
         vertex_subbuffer_ = object_buffer_->suballoc(vertex_len);
         staging_buffer_->clear(0);
@@ -1207,6 +1207,14 @@ public:
             0, 
             vertex_subbuffer_
         );
+        record_commands();
+    }
+
+    void remove_triangle() {
+        for(int i = 0; i < 3; i++) {        
+            object_buffer_->pop(index_subbuffer_, sizeof(indices_[0]));
+        }
+        object_buffer_->pop(vertex_subbuffer_, sizeof(vertices_[0]));
         record_commands();
     }
 };

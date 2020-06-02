@@ -96,9 +96,6 @@ public:
     // Suballocate at the end of the buffer and return the handle
     SubBuffer suballoc(size_t size);
 
-    // Clear the contents of a subbuffer
-    void clear(SubBuffer buffer);
-
     // Copy CPU data into a GPU subbuffer
     void copy(SubBuffer buffer, void *data, size_t length);
     
@@ -109,6 +106,15 @@ public:
     // Raw copy CPU data to the GPU buffer without considering subbuffers
     // Unsafe! Do not use in conjunction with subbuffer management
     void copy_raw(void *data, size_t length, size_t offset);
+
+    // Remove a length of bytes from a subbuffer starting at an offset
+    void remove(SubBuffer buffer, size_t offset, size_t length);
+
+    // Treat the subbuffer as a stack and pop the last length of bytes
+    void pop(SubBuffer buffer, size_t length);
+
+    // Clear the contents of a subbuffer
+    void clear(SubBuffer buffer);
 };
 
 #endif

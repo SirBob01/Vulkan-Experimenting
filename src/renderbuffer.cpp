@@ -67,7 +67,7 @@ void RenderBuffer::alloc_memory() {
         }
     }
     if(memory_type < 0) {
-        throw std::runtime_error("Vulkan failed to create buffer");
+        throw std::runtime_error("Vulkan failed to create buffer.");
     }
     vk::MemoryAllocateInfo alloc_info(
         requirements.size,
@@ -85,7 +85,7 @@ void RenderBuffer::alloc_memory() {
 void RenderBuffer::copy_to_offset(RenderBuffer &target, size_t length,
                                   size_t src_offset, size_t dst_offset) {
     if(length + src_offset > length_) {
-        throw std::runtime_error("SubBuffer copy length too large");   
+        throw std::runtime_error("SubBuffer copy length too large.");   
     }
     if(length + dst_offset > target.length_) {
         target.resize(length + dst_offset);
@@ -179,7 +179,7 @@ void RenderBuffer::resuballoc(SubBuffer buffer, size_t size) {
 
 void RenderBuffer::check_subbuffer(SubBuffer buffer) {
     if(buffer >= subbuffers_.size()) {
-        throw std::runtime_error("Invalid subbuffer index");
+        throw std::runtime_error("Invalid subbuffer index.");
     }
 }
 
@@ -238,16 +238,11 @@ SubBuffer RenderBuffer::suballoc(size_t size) {
     return subbuffers_.size() - 1;
 }
 
-void RenderBuffer::clear(SubBuffer buffer) {
-    check_subbuffer(buffer);
-    subbuffers_[buffer].filled = 0;
-}
-
 void RenderBuffer::copy(SubBuffer buffer, void *data, size_t length) {
     check_subbuffer(buffer);
     auto &buffer_data = subbuffers_[buffer];
     if(!host_visible_) {
-        throw std::runtime_error("Buffer is not host visible");
+        throw std::runtime_error("Buffer is not host visible.");
     }
     if(length + buffer_data.filled > buffer_data.size) {
         resuballoc(buffer, length + buffer_data.filled);
@@ -281,10 +276,50 @@ void RenderBuffer::copy_buffer(RenderBuffer &target, size_t length,
 
 void RenderBuffer::copy_raw(void *data, size_t length, size_t offset) {
     if(!host_visible_) {
-        throw std::runtime_error("Buffer is not host visible");
+        throw std::runtime_error("Buffer is not host visible.");
     }
     if(offset + length > length_) {
         resize(offset + length);
     }
     std::memcpy(bind_ + offset, data, length);
+}
+
+void RenderBuffer::remove(SubBuffer buffer, size_t offset, size_t length) {
+    check_subbuffer(buffer);
+    auto &buffer_data = subbuffers_[buffer];
+    if(offset + length > buffer_data.filled) {
+        throw std::runtime_error("Remove length longer than filled.");
+    }
+    size_t shift_start = offset + length;
+    size_t shift_length = buffer_data.filled - shift_start;
+
+    // Shift the data past the removal block to the left
+    if(shift_length) {
+        RenderBuffer temp(
+            shift_length, logical_, physical_, usage_, 
+            properties_, copier_, transfer_queue_
+        );
+        copy_to_offset(
+            temp, shift_length, 
+            buffer_data.offset + shift_start, 0
+        );
+        temp.copy_to_offset(
+            *this, shift_length, 
+            0, buffer_data.offset + offset
+        );    
+    } 
+    buffer_data.filled -= length;
+}
+
+void RenderBuffer::pop(SubBuffer buffer, size_t length) {
+    check_subbuffer(buffer);
+    if(length > subbuffers_[buffer].filled) {
+        throw std::runtime_error("Pop length longer than filled.");
+    }
+    subbuffers_[buffer].filled -= length;
+}
+
+void RenderBuffer::clear(SubBuffer buffer) {
+    check_subbuffer(buffer);
+    subbuffers_[buffer].filled = 0;
 }

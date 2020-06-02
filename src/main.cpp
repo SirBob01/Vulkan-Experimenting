@@ -62,6 +62,9 @@ int main(int argc, char **argv) {
                 else if(e.key.keysym.sym == SDLK_t) {
                     renderer.add_triangle();
                 }
+                else if(e.key.keysym.sym == SDLK_r) {
+                    renderer.remove_triangle();
+                }
             }
         }
     }
