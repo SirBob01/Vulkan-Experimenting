@@ -59,6 +59,9 @@ int main(int argc, char **argv) {
                         fullscreen = false;
                     }
                 }
+                else if(e.key.keysym.sym == SDLK_t) {
+                    renderer.add_triangle();
+                }
             }
         }
     }

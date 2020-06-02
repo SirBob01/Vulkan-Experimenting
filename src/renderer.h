@@ -69,16 +69,12 @@ struct UniformBufferObject {
 // Idea: Create classes of command pools (static/dynamic)
 class Renderer {
     std::vector<RVertex> vertices_ = {
-        {{-0.2f, -0.2f}, {0.0f, 0.0f, 1.0f}},
-        {{-0.7f, -0.7f}, {1.0f, 0.0f, 0.0f}},
-        {{0.2f, -0.7f}, {0.0f, 1.0f, 0.0f}},
-
         {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
         {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
         {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
     };
     std::vector<uint16_t> indices_ = {
-        0, 1, 2, 3, 4, 5
+        0, 1, 2
     };
 
     SDL_Window *window_;
@@ -799,22 +795,24 @@ class Renderer {
 
         // Copy the index data
         int index_len = sizeof(indices_[0]) * indices_.size();
-        index_subbuffer_ = object_buffer_->suballoc(index_len);
+        int vertex_len = sizeof(vertices_[0]) * vertices_.size();
 
-        staging_buffer_->copy_raw(&indices_[0], index_len, 0);
-        staging_buffer_->copy_to(
+
+        index_subbuffer_ = object_buffer_->suballoc(buffer_size_);
+        staging_buffer_->clear(0);
+        staging_buffer_->copy(0, &indices_[0], index_len);
+        staging_buffer_->copy_buffer(
             *object_buffer_, 
             index_len, 
             0, 
             index_subbuffer_
-        );
-
-        // Copy the vertex data
-        int vertex_len = sizeof(vertices_[0]) * vertices_.size();
-        vertex_subbuffer_ = object_buffer_->suballoc(vertex_len);
+        );    
         
-        staging_buffer_->copy_raw(&vertices_[0], vertex_len, 0);
-        staging_buffer_->copy_to(
+        // Copy the vertex data
+        vertex_subbuffer_ = object_buffer_->suballoc(buffer_size_);
+        staging_buffer_->clear(0);
+        staging_buffer_->copy(0, &vertices_[0], vertex_len);
+        staging_buffer_->copy_buffer(
             *object_buffer_, 
             vertex_len, 
             0, 
@@ -835,10 +833,10 @@ class Renderer {
         );
 
         // Ensure buffer offsets fit alignment requirements
-        size_t size = 0;
-        while(size < sizeof(UniformBufferObject)) {
-            size += physical_->get_limits().minUniformBufferOffsetAlignment;
-        }
+        size_t size = round_up(
+            sizeof(UniformBufferObject),
+            physical_->get_limits().minUniformBufferOffsetAlignment
+        );
         for(int i = 0; i < images_.size(); i++) {
             uniform_buffer_->suballoc(size);
         }
@@ -954,7 +952,7 @@ class Renderer {
 
             // Record the actual draw command!!!!
             graphics_commands_[i]->drawIndexed(
-                object_buffer_->get_subfill(index_subbuffer_),
+                object_buffer_->get_subfill(index_subbuffer_) / sizeof(uint16_t),
                 1, 0, 0, 0
             );
 
@@ -1056,7 +1054,7 @@ public:
     Renderer(SDL_Window *window) {
         window_ = window;
         max_frames_processing_ = 3;
-        buffer_size_ = 134217728; // Initial buffer size (allocate large)
+        buffer_size_ = 2; // Initial buffer size (allocate large)
         current_frame_ = 0;
 
         clear_value_.color.setFloat32({0, 0, 0, 1});
@@ -1177,6 +1175,37 @@ public:
     void set_fill(int r, int g, int b, int a) {
         clear_value_.color.setFloat32(
             {r/255.0f, g/255.0f, b/255.0f, a/255.0f}
+        );
+        record_commands();
+    }
+
+    void add_triangle() {
+        std::vector<RVertex> vertices = {
+            {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+        };
+        std::vector<uint16_t> indices = {
+            2, 3, 0
+        };
+
+        // Copy the index data
+        int index_len = sizeof(indices[0]) * indices.size();
+        staging_buffer_->clear(0);
+        staging_buffer_->copy(0, &indices[0], index_len);
+        staging_buffer_->copy_buffer(
+            *object_buffer_, 
+            index_len, 
+            0, 
+            index_subbuffer_
+        );
+        // Copy the vertex data
+        int vertex_len = sizeof(vertices[0]) * vertices.size();
+        staging_buffer_->clear(0);
+        staging_buffer_->copy(0, &vertices[0], vertex_len);
+        staging_buffer_->copy_buffer(
+            *object_buffer_, 
+            vertex_len, 
+            0, 
+            vertex_subbuffer_
         );
         record_commands();
     }

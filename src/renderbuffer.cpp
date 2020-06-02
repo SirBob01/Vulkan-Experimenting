@@ -23,6 +23,9 @@ RenderBuffer::RenderBuffer(size_t length,
         properties_ & vk::MemoryPropertyFlagBits::eHostVisible
     );
 
+    // Subbuffer offsets must be a multiple of 4
+    offset_alignment_ = 4;
+
     initialize_buffer();
     alloc_memory();
 
@@ -70,41 +73,105 @@ void RenderBuffer::alloc_memory() {
     );
     memory_ = logical_.allocateMemoryUnique(
         alloc_info
-    );    
+    );
     // Bind the device memory to the buffer
     logical_.bindBufferMemory(
         handle_.get(), memory_.get(), 0
     );
 }
 
+void RenderBuffer::copy_to_offset(RenderBuffer &target, size_t length,
+                                  size_t src_offset, size_t dst_offset) {
+    if(length + src_offset > length_) {
+        throw std::runtime_error("SubBuffer copy length too large");   
+    }
+    if(length + dst_offset > target.length_) {
+        target.resize(length + dst_offset);
+    }
+    vk::CommandBufferBeginInfo begin_info(
+        vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+    );
+    // Perform the copy
+    copier_.begin(begin_info);
+    vk::BufferCopy copy_region(src_offset, dst_offset, length);
+    copier_.copyBuffer(
+        get_handle(), target.get_handle(), 
+        1, &copy_region
+    );
+    copier_.end();
+
+    // Submit the command to the graphics queue
+    vk::SubmitInfo submit_info(
+        0, nullptr, nullptr, 
+        1, &copier_
+    );
+    transfer_queue_.submit(submit_info, nullptr);
+    transfer_queue_.waitIdle();
+}
+
+void RenderBuffer::resize(size_t size) {
+    // Copy data to temporary buffer
+    RenderBuffer temp(
+        length_, logical_, physical_, usage_, 
+        properties_, copier_, transfer_queue_
+    );
+    copy_to_offset(temp, length_, 0, 0);
+    if(host_visible_) {
+        logical_.unmapMemory(memory_.get());
+    }
+
+    // Reinitialize buffer to new size
+    length_ = round_up(size, offset_alignment_);
+    initialize_buffer();
+    alloc_memory();
+    if(host_visible_) {
+        bind_ = reinterpret_cast<char *>(logical_.mapMemory(
+            memory_.get(), 0, 
+            length_
+        ));
+    }
+    // Copy data back
+    temp.copy_to_offset(*this, temp.get_size(), 0, 0);
+}
+
 void RenderBuffer::resuballoc(SubBuffer buffer, size_t size) {
     check_subbuffer(buffer);
     auto &buffer_data = subbuffers_[buffer];
-    size_t shift = size - buffer_data.size;
-    size_t temp_length = 0;
-    buffer_data.size = size;
 
-    // Shift all offsets
-    for(int i = buffer+1; i < subbuffers_.size(); i++) {
-        temp_length += subbuffers_[i].size;
-        subbuffers_[i].offset += shift;
-    }
+    size = round_up(size, offset_alignment_);
+    size_t shift = size - buffer_data.size;
+    size_t shift_length = 0;
+
     // Check for realloc
     auto last = subbuffers_.back();
-    if(last.offset+last.size > length_) {
-        resize(last.offset+last.size);
+    size_t new_size = last.offset + last.size + shift;
+    if(new_size > length_) {
+        resize(new_size);
     }
+
     // Perform the copying
-    if(temp_length) {
+    buffer_data.size = size;
+    for(int i = buffer+1; i < subbuffers_.size(); i++) {
+        shift_length += subbuffers_[i].size;
+        subbuffers_[i].offset += shift;
+    }
+    if(shift_length) {
         RenderBuffer temp(
-            temp_length, logical_, physical_, usage_, 
+            shift_length, logical_, physical_, usage_, 
             properties_, copier_, transfer_queue_
         );
-        copy_to_raw(temp, temp_length, subbuffers_[buffer].offset, 0);  
-        temp.copy_to_raw(
-            *this, temp_length, 
-            0, subbuffers_[buffer+1].offset
-        );      
+        copy_to_offset(
+            temp, 
+            shift_length, 
+            subbuffers_[buffer+1].offset - shift, 
+            0
+        );
+        temp.copy_to_offset(
+            *this, 
+            shift_length, 
+            0,
+            subbuffers_[buffer+1].offset 
+        );
     }
 }
 
@@ -149,6 +216,7 @@ char *RenderBuffer::get_mapped() {
 }
 
 SubBuffer RenderBuffer::suballoc(size_t size) {
+    size = round_up(size, offset_alignment_);
     if(subbuffers_.empty()) {
         subbuffers_.push_back({size, 0, 0});
         if(size > length_) {
@@ -157,39 +225,15 @@ SubBuffer RenderBuffer::suballoc(size_t size) {
     }
     else {
         auto last = subbuffers_.back();
+        size_t offset = last.offset + last.size;
         subbuffers_.push_back({
-            size, last.offset + last.size, 0
+            size, offset, 0
         });
-        if(last.offset + last.size + size > length_) {
-            resize(last.offset + last.size + size);
+        if(offset + size > length_) {
+            resize(offset + size);
         }
     }
     return subbuffers_.size() - 1;
-}
-
-void RenderBuffer::resize(size_t size) {
-    // Copy data to temporary buffer
-    RenderBuffer temp(
-        length_, logical_, physical_, usage_, 
-        properties_, copier_, transfer_queue_
-    );
-    copy_to_raw(temp, length_, 0, 0);
-    if(host_visible_) {
-        logical_.unmapMemory(memory_.get());
-    }
-
-    // Reinitialize buffer to new size
-    length_ = size;
-    initialize_buffer();
-    alloc_memory();
-    if(host_visible_) {
-        bind_ = reinterpret_cast<char *>(logical_.mapMemory(
-            memory_.get(), 0, 
-            length_
-        ));
-    }
-    // Copy data back
-    temp.copy_to_raw(*this, temp.get_size(), 0, 0);
 }
 
 void RenderBuffer::clear(SubBuffer buffer) {
@@ -197,14 +241,14 @@ void RenderBuffer::clear(SubBuffer buffer) {
     subbuffers_[buffer].filled = 0;
 }
 
-void RenderBuffer::copy(SubBuffer buffer, void *data, int length) {
+void RenderBuffer::copy(SubBuffer buffer, void *data, size_t length) {
     check_subbuffer(buffer);
     auto &buffer_data = subbuffers_[buffer];
     if(!host_visible_) {
         throw std::runtime_error("Buffer is not host visible");
     }
-    if(length+buffer_data.filled > buffer_data.size) {
-        resuballoc(buffer, length+buffer_data.filled);
+    if(length + buffer_data.filled > buffer_data.size) {
+        resuballoc(buffer, length + buffer_data.filled);
     }
     std::memcpy(
         bind_ + buffer_data.offset + buffer_data.filled, 
@@ -214,56 +258,26 @@ void RenderBuffer::copy(SubBuffer buffer, void *data, int length) {
     buffer_data.filled += length;
 }
 
-void RenderBuffer::copy_to(RenderBuffer &target, int length,
-                           SubBuffer src, SubBuffer dst) {
+void RenderBuffer::copy_buffer(RenderBuffer &target, size_t length,
+                               SubBuffer src, SubBuffer dst) {
     check_subbuffer(src);
     target.check_subbuffer(dst);
 
-    auto &src_buffer_data = subbuffers_[src];
-    auto &dst_buffer_data = target.subbuffers_[dst];
+    auto &src_buffer = subbuffers_[src];
+    auto &dst_buffer = target.subbuffers_[dst];
     
-    if(length+dst_buffer_data.filled > dst_buffer_data.size) {
-        target.resuballoc(dst, length+dst_buffer_data.filled);
+    if(length + dst_buffer.filled > dst_buffer.size) {
+        target.resuballoc(dst, length + dst_buffer.filled);
     }
-    copy_to_raw(
+    copy_to_offset(
         target, length, 
-        src_buffer_data.offset, 
-        dst_buffer_data.offset + dst_buffer_data.filled
+        src_buffer.offset, 
+        dst_buffer.offset + dst_buffer.filled
     );
-    dst_buffer_data.filled += length;
+    dst_buffer.filled += length;
 }
 
-void RenderBuffer::copy_to_raw(RenderBuffer &target, int length,
-                               int src_offset, int dst_offset) {
-    if(length+src_offset > length_) {
-        throw std::runtime_error("SubBuffer copy length too large");   
-    }
-    if(length+dst_offset > target.length_) {
-        target.resize(length+dst_offset);
-    }
-    vk::CommandBufferBeginInfo begin_info(
-        vk::CommandBufferUsageFlagBits::eOneTimeSubmit
-    );
-
-    // Perform the copy
-    copier_.begin(begin_info);
-    vk::BufferCopy copy_region(src_offset, dst_offset, length);
-    copier_.copyBuffer(
-        get_handle(), target.get_handle(), 
-        1, &copy_region
-    );
-    copier_.end();
-
-    // Submit the command to the graphics queue
-    vk::SubmitInfo submit_info(
-        0, nullptr, nullptr, 
-        1, &copier_
-    );
-    transfer_queue_.submit(submit_info, nullptr);
-    transfer_queue_.waitIdle();
-}
-
-void RenderBuffer::copy_raw(void *data, int length, int offset) {
+void RenderBuffer::copy_raw(void *data, size_t length, size_t offset) {
     if(!host_visible_) {
         throw std::runtime_error("Buffer is not host visible");
     }

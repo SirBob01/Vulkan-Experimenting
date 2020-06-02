@@ -6,6 +6,7 @@
 #include <cstring>
 #include <iostream>
 #include "physical.h"
+#include "util.h"
 
 // An integer handle to a SubBuffer in a buffer
 using SubBuffer = int;
@@ -25,6 +26,8 @@ class RenderBuffer {
     vk::CommandBuffer copier_;
     vk::Queue transfer_queue_;
 
+    size_t offset_alignment_;
+
     size_t length_;
     bool host_visible_;
     char *bind_;
@@ -42,6 +45,10 @@ class RenderBuffer {
 
     // Allocate memory in the GPU for the buffer
     void alloc_memory();
+
+    // Copy data to another RenderBuffers using offsets
+    void copy_to_offset(RenderBuffer &target, size_t length,
+                        size_t src_offset, size_t dst_offset);
 
     // Resize the entire buffer
     // This is an expensive call, so allocate large upfront
@@ -93,18 +100,15 @@ public:
     void clear(SubBuffer buffer);
 
     // Copy CPU data into a GPU subbuffer
-    void copy(SubBuffer buffer, void *data, int length);
+    void copy(SubBuffer buffer, void *data, size_t length);
     
     // Copy data to another RenderBuffer
-    void copy_to(RenderBuffer &target, int length,
-                 SubBuffer src, SubBuffer dst);
-
-    // Copy data to another RenderBuffers using raw offsets
-    void copy_to_raw(RenderBuffer &target, int length,
-                     int src_offset, int dst_offset);
+    void copy_buffer(RenderBuffer &target, size_t length,
+                     SubBuffer src, SubBuffer dst);
 
     // Raw copy CPU data to the GPU buffer without considering subbuffers
-    void copy_raw(void *data, int length, int offset);
+    // Unsafe! Do not use in conjunction with subbuffer management
+    void copy_raw(void *data, size_t length, size_t offset);
 };
 
 #endif
