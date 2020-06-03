@@ -459,7 +459,8 @@ class Renderer {
     }
 
     // Create the descriptor set layout
-    // TODO: Understand descriptor sets
+    // Describes the data passed to a shader stage
+    // Can add more stuff for dynamic shader behavior
     void create_descriptor_layout() {
         vk::DescriptorSetLayoutBinding binding(
             0, vk::DescriptorType::eUniformBuffer, 1,
@@ -528,8 +529,7 @@ class Renderer {
 
         // 1 Subpass
         vk::AttachmentReference color_ref(
-            0,
-            vk::ImageLayout::eColorAttachmentOptimal
+            0, vk::ImageLayout::eColorAttachmentOptimal
         );
         vk::SubpassDescription subpass(
             vk::SubpassDescriptionFlags(),
@@ -824,7 +824,6 @@ class Renderer {
     }
 
     // Create a uniform buffer per swapchain image
-    // TODO: Understand UBOs
     void create_uniform_buffer() {
         uniform_buffer_ = std::make_unique<RenderBuffer>(
             buffer_size_, logical_.get(), *physical_, 
@@ -845,8 +844,7 @@ class Renderer {
         }
     }
 
-    // Create the descriptor pool
-    // TODO: Understand descriptor pools
+    // Create the pool that manages all descriptor sets
     void create_descriptor_pool() {
         vk::DescriptorPoolSize size(
             vk::DescriptorType::eUniformBuffer,
@@ -863,9 +861,9 @@ class Renderer {
         );
     }
 
-    // Create the descriptor sets
-    // TODO: Understand this
+    // Create the descriptor sets and map them to the UBOs
     void create_descriptor_sets() {
+        // Allocate the descriptor sets within the pool
         std::vector<vk::DescriptorSetLayout> layouts(
             images_.size(), descriptor_layout_.get()
         );
@@ -878,6 +876,7 @@ class Renderer {
             alloc_info
         );
 
+        // Map each UBO in uniform_buffer_ to a descriptor set
         size_t unit = sizeof(UniformBufferObject);
         for(int i = 0; i < uniform_buffer_->get_subbuffer_count(); i++) {
             vk::DescriptorBufferInfo buffer_info(
@@ -888,10 +887,9 @@ class Renderer {
                 descriptor_sets_[i].get(),
                 0, 0, 1,
                 vk::DescriptorType::eUniformBuffer,
-                nullptr,
-                &buffer_info
+                nullptr, &buffer_info, nullptr   
             );
-            logical_->updateDescriptorSets(1, &write_info, 0, nullptr);
+            logical_->updateDescriptorSets(write_info, nullptr);
         }
     }
 
@@ -934,23 +932,25 @@ class Renderer {
             );
 
             // Bind the vertex and index sub-buffers to the command queue
-            vk::Buffer buffers[] = {
-                object_buffer_->get_handle()
-            };
-            vk::DeviceSize offsets[] = {
+            std::vector<vk::DeviceSize> offsets = {
                 object_buffer_->get_offset(vertex_subbuffer_)
             };
             graphics_commands_[i]->bindVertexBuffers(
-                0, 1, buffers, offsets
+                0, object_buffer_->get_handle(), offsets
             );
             graphics_commands_[i]->bindIndexBuffer(
                 object_buffer_->get_handle(), 
                 object_buffer_->get_offset(index_subbuffer_), 
                 vk::IndexType::eUint16
             );
+
+            // Bind desccriptor sets
+            std::vector<vk::DescriptorSet> bound_descriptors = {
+                descriptor_sets_[i].get()
+            };
             graphics_commands_[i]->bindDescriptorSets(
                 vk::PipelineBindPoint::eGraphics, layout_.get(),
-                0, 1, &descriptor_sets_[i].get(), 0, nullptr
+                0, bound_descriptors, nullptr
             );
 
             // Record the actual draw command!!!!
@@ -993,9 +993,7 @@ class Renderer {
         }
     }
 
-    // Update a uniform buffer every frame
-    // TODO: Understand math behind UBOs... this breaks on screen minimize
-    // Is this faster than just updating vertex buffer directly?
+    // Update the uniform buffers every frame
     void update_uniform_buffer(uint32_t image_index) {
         static auto start_time = std::chrono::high_resolution_clock::now();
         auto current_time = std::chrono::high_resolution_clock::now();
@@ -1008,12 +1006,16 @@ class Renderer {
                                 glm::vec3(0.0f, 0.0f, 1.0f));
         ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), 
                                glm::vec3(0.0f, 0.0f, 1.0f));
+        float ratio = 0.0f;
+        if(image_extent_.height) {
+            ratio = image_extent_.width / static_cast<float>(image_extent_.height);
+        }
         ubo.proj = glm::perspective(
-            glm::radians(45.0f), 
-            image_extent_.width / (float) image_extent_.height, 
-            1.0f, 10.0f);
+            glm::radians(45.0f), ratio, 1.0f, 10.0f
+        );
         ubo.proj[1][1] *= -1;
 
+        // Overwrite currently written UBO
         uniform_buffer_->clear(image_index);
         uniform_buffer_->copy(image_index, &ubo, sizeof(ubo));
     }
@@ -1022,11 +1024,11 @@ class Renderer {
     void reset_swapchain() {
         logical_->waitIdle();
 
-        // Handle minimized window (special case)
-        int width, height;
-        SDL_Vulkan_GetDrawableSize(window_, &width, &height);
-        while(!width || !height) {
-            SDL_Vulkan_GetDrawableSize(window_, &width, &height);
+        // Do not recreate swapchain if minimized
+        auto supported = physical_->get_swapchain_support();
+        auto extent = get_swapchain_extent(supported.capabilities);
+        if(!extent.width || !extent.height) {
+            return;
         }
 
         // Clear array objects
@@ -1106,7 +1108,7 @@ public:
     // Update the display
     void refresh() {
         logical_->waitForFences(
-            1, &fences_[current_frame_].get(), 
+            fences_[current_frame_].get(), 
             true, UINT64_MAX
         );
 
@@ -1128,12 +1130,12 @@ public:
 
         if(active_fences_[image_index]) {
             logical_->waitForFences(
-                1, &active_fences_[image_index],
+                active_fences_[image_index],
                 true, UINT64_MAX
             );
         }
         active_fences_[image_index] = fences_[current_frame_].get();
-        logical_->resetFences(1, &fences_[current_frame_].get());
+        logical_->resetFences(active_fences_[image_index]);
 
         // Submit commands to the graphics queue
         // for rendering to that image
@@ -1150,6 +1152,7 @@ public:
         );
         graphics_queue_.submit(
             submit_info, 
+            // Signal current frame fence commands are executed
             fences_[current_frame_].get()
         );
 

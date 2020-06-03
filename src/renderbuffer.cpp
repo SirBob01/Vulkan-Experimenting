@@ -98,7 +98,7 @@ void RenderBuffer::copy_to_offset(RenderBuffer &target, size_t length,
     vk::BufferCopy copy_region(src_offset, dst_offset, length);
     copier_.copyBuffer(
         get_handle(), target.get_handle(), 
-        1, &copy_region
+        copy_region
     );
     copier_.end();
 
