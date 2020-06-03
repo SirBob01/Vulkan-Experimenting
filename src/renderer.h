@@ -1,11 +1,14 @@
 #ifndef RENDERER_H_
 #define RENDERER_H_
 #define VULKAN_HPP_TYPESAFE_CONVERSION
+#define STB_IMAGE_IMPLEMENTATION
 #define GLM_FORCE_RADIANS
+
 #include <vulkan/vulkan.hpp>
 #include <SDL2/SDL_vulkan.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include "assets/stb_image.h"
 
 #include <chrono>
 
