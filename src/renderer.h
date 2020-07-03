@@ -1178,6 +1178,7 @@ public:
         current_frame_ %= max_frames_processing_;
     }
 
+    // Set the background fill color
     void set_fill(int r, int g, int b, int a) {
         clear_value_.color.setFloat32(
             {r/255.0f, g/255.0f, b/255.0f, a/255.0f}
@@ -1185,6 +1186,7 @@ public:
         record_commands();
     }
 
+    // Testing dynamic subbuffer appending
     void add_triangle() {
         std::vector<RVertex> vertices = {
             {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
@@ -1216,6 +1218,7 @@ public:
         record_commands();
     }
 
+    // Testing dynamic subbuffer removal
     void remove_triangle() {
         for(int i = 0; i < 3; i++) {        
             object_buffer_->pop(index_subbuffer_, sizeof(indices_[0]));

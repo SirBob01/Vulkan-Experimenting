@@ -4,7 +4,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include <cstring>
-#include <iostream>
+
 #include "physical.h"
 #include "util.h"
 

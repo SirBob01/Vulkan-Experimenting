@@ -102,7 +102,7 @@ void RenderBuffer::copy_to_offset(RenderBuffer &target, size_t length,
     );
     copier_.end();
 
-    // Submit the command to the graphics queue
+    // Submit the command to the transfer queue
     vk::SubmitInfo submit_info(
         0, nullptr, nullptr, 
         1, &copier_
