@@ -20,6 +20,7 @@
 #include <memory>
 
 #include "physical.h"
+#include "texture.h"
 #include "rendercommands.h"
 #include "renderbuffer.h"
 #include "renderdebug.h"
@@ -862,6 +863,7 @@ class Renderer {
     }
 
     // Create the descriptor sets and map them to the UBOs
+    // Descriptor sets can be accessed by a particular shader stage
     void create_descriptor_sets() {
         // Allocate the descriptor sets within the pool
         std::vector<vk::DescriptorSetLayout> layouts(
@@ -885,7 +887,8 @@ class Renderer {
             );
             vk::WriteDescriptorSet write_info(
                 descriptor_sets_[i].get(),
-                0, 0, 1,
+                0, // Binding value in shader layout 
+                0, 1,
                 vk::DescriptorType::eUniformBuffer,
                 nullptr, &buffer_info, nullptr   
             );
@@ -1225,6 +1228,24 @@ public:
         }
         object_buffer_->pop(vertex_subbuffer_, sizeof(vertices_[0]));
         record_commands();
+    }
+
+    // Load a texture
+    void load_texture(std::string filename) {
+        int width, height, channels;
+        stbi_uc *pixels = stbi_load(
+            filename.c_str(), 
+            &width, &height, &channels, 
+            STBI_rgb_alpha
+        );
+
+        vk::DeviceSize image_size = width * height * 4;
+        if(!pixels) {
+            throw std::runtime_error("Could not load image.");
+        }
+        staging_buffer_->clear(0);
+        staging_buffer_->copy(0, pixels, image_size);
+        stbi_image_free(pixels);
     }
 };
 

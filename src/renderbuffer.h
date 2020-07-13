@@ -1,6 +1,7 @@
 #ifndef RENDER_BUFFER_H_
 #define RENDER_BUFFER_H_
 #define VULKAN_HPP_TYPESAFE_CONVERSION
+
 #include <vulkan/vulkan.hpp>
 
 #include <cstring>
