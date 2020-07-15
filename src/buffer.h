@@ -24,7 +24,7 @@ class RenderBuffer {
     vk::BufferUsageFlags usage_;
     vk::MemoryPropertyFlags properties_;
 
-    vk::CommandBuffer copier_;
+    vk::CommandBuffer command_buffer_;
     vk::Queue transfer_queue_;
 
     size_t offset_alignment_;
@@ -68,7 +68,7 @@ public:
                  PhysicalDevice &physical,
                  vk::BufferUsageFlags usage, 
                  vk::MemoryPropertyFlags properties,
-                 vk::CommandBuffer &copier, 
+                 vk::CommandBuffer &command_buffer, 
                  vk::Queue &transfer_queue);
     ~RenderBuffer();
 

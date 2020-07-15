@@ -1,11 +1,11 @@
-#include "renderbuffer.h"
+#include "buffer.h"
 
 RenderBuffer::RenderBuffer(size_t length, 
                            vk::Device &logical, 
                            PhysicalDevice &physical,
                            vk::BufferUsageFlags usage, 
                            vk::MemoryPropertyFlags properties,
-                           vk::CommandBuffer &copier, 
+                           vk::CommandBuffer &command_buffer, 
                            vk::Queue &transfer_queue) : physical_(physical) {
     logical_ = logical;
     length_ = length;
@@ -16,7 +16,7 @@ RenderBuffer::RenderBuffer(size_t length,
              vk::BufferUsageFlagBits::eTransferDst;
     properties_ = properties;
 
-    copier_ = copier;
+    command_buffer_ = command_buffer;
     transfer_queue_ = transfer_queue;
 
     host_visible_ = static_cast<bool>(
@@ -94,18 +94,18 @@ void RenderBuffer::copy_to_offset(RenderBuffer &target, size_t length,
         vk::CommandBufferUsageFlagBits::eOneTimeSubmit
     );
     // Perform the copy
-    copier_.begin(begin_info);
+    command_buffer_.begin(begin_info);
     vk::BufferCopy copy_region(src_offset, dst_offset, length);
-    copier_.copyBuffer(
+    command_buffer_.copyBuffer(
         get_handle(), target.get_handle(), 
         copy_region
     );
-    copier_.end();
+    command_buffer_.end();
 
     // Submit the command to the transfer queue
     vk::SubmitInfo submit_info(
         0, nullptr, nullptr, 
-        1, &copier_
+        1, &command_buffer_
     );
     transfer_queue_.submit(submit_info, nullptr);
     transfer_queue_.waitIdle();
@@ -115,7 +115,7 @@ void RenderBuffer::resize(size_t size) {
     // Copy data to temporary buffer
     RenderBuffer temp(
         length_, logical_, physical_, usage_, 
-        properties_, copier_, transfer_queue_
+        properties_, command_buffer_, transfer_queue_
     );
     copy_to_offset(temp, length_, 0, 0);
     if(host_visible_) {
@@ -160,7 +160,7 @@ void RenderBuffer::resuballoc(SubBuffer buffer, size_t size) {
     if(shift_length) {
         RenderBuffer temp(
             shift_length, logical_, physical_, usage_, 
-            properties_, copier_, transfer_queue_
+            properties_, command_buffer_, transfer_queue_
         );
         copy_to_offset(
             temp, 
@@ -297,7 +297,7 @@ void RenderBuffer::remove(SubBuffer buffer, size_t offset, size_t length) {
     if(shift_length) {
         RenderBuffer temp(
             shift_length, logical_, physical_, usage_, 
-            properties_, copier_, transfer_queue_
+            properties_, command_buffer_, transfer_queue_
         );
         copy_to_offset(
             temp, shift_length, 

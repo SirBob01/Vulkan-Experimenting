@@ -21,9 +21,9 @@
 
 #include "physical.h"
 #include "texture.h"
-#include "rendercommands.h"
-#include "renderbuffer.h"
-#include "renderdebug.h"
+#include "commands.h"
+#include "buffer.h"
+#include "debug.h"
 #include "util.h"
 
 #ifndef NDEBUG
@@ -128,7 +128,7 @@ class Renderer {
 
     // Command buffer (recording commands)
     std::vector<vk::UniqueCommandBuffer> graphics_commands_;
-    vk::UniqueCommandBuffer copy_command_; // For copying
+    vk::UniqueCommandBuffer single_command_; // For copying
 
     // Command Queues (submitting commands)
     AvailableQueues queues_;
@@ -771,7 +771,7 @@ class Renderer {
             vk::CommandBufferLevel::ePrimary,
             1
         );
-        copy_command_ = std::move(
+        single_command_ = std::move(
             logical_->allocateCommandBuffersUnique(copy_alloc_info)[0]
         );
 
@@ -782,7 +782,7 @@ class Renderer {
             vk::MemoryPropertyFlagBits::eHostVisible | 
             vk::MemoryPropertyFlagBits::eHostCoherent |
             vk::MemoryPropertyFlagBits::eHostCached,
-            copy_command_.get(), transfer_queue_
+            single_command_.get(), transfer_queue_
         );
         staging_buffer_->suballoc(buffer_size_);
     }
@@ -794,7 +794,7 @@ class Renderer {
         object_buffer_ = std::make_unique<RenderBuffer>(
             buffer_size_, logical_.get(), *physical_,
             usage, vk::MemoryPropertyFlagBits::eDeviceLocal,
-            copy_command_.get(), transfer_queue_
+            single_command_.get(), transfer_queue_
         );
 
         // Copy the index data
@@ -832,7 +832,7 @@ class Renderer {
             vk::MemoryPropertyFlagBits::eHostVisible |
             vk::MemoryPropertyFlagBits::eHostCoherent |
             vk::MemoryPropertyFlagBits::eHostCached,
-            copy_command_.get(), transfer_queue_
+            single_command_.get(), transfer_queue_
         );
 
         // Ensure buffer offsets fit alignment requirements
