@@ -2,12 +2,17 @@
 
 Texture::Texture(vk::Device &logical,
                  PhysicalDevice &physical,
+                 vk::CommandBuffer &command_buffer,
+                 vk::Queue &queue,
                  RenderBuffer &texels, 
                  uint32_t width, uint32_t height) : physical_(physical) {
     logical_ = logical;
     usage_ = vk::ImageUsageFlagBits::eTransferDst | 
              vk::ImageUsageFlagBits::eSampled;
     properties_ = vk::MemoryPropertyFlagBits::eDeviceLocal;
+
+    command_buffer_ = command_buffer;
+    queue_ = queue;
 
     // Create the image
     vk::ImageCreateInfo image_info(
@@ -24,6 +29,10 @@ Texture::Texture(vk::Device &logical,
     image_ = logical_.createImageUnique(image_info);
 
     alloc_memory();
+    transition_layout(
+        vk::ImageLayout::eUndefined, 
+        vk::ImageLayout::eTransferDstOptimal
+    );
 }
 
 void Texture::alloc_memory() {
@@ -52,4 +61,38 @@ void Texture::alloc_memory() {
     logical_.bindImageMemory(
         image_.get(), memory_.get(), 0
     );
+}
+
+void Texture::transition_layout(vk::ImageLayout from, vk::ImageLayout to) {
+    vk::ImageMemoryBarrier barrier(
+        vk::AccessFlagBits::eVertexAttributeRead, // TODO src
+        vk::AccessFlagBits::eVertexAttributeRead, // TODO dst
+        from, to,
+        0, 0,
+        image_.get(),
+        {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}
+    );
+
+    // TODO: Abstract away command buffer stuff
+    // I'm beginning to repeat myself (see RenderBuffer copy)
+    vk::CommandBufferBeginInfo begin_info(
+        vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+    );
+    command_buffer_.begin(begin_info);
+    command_buffer_.pipelineBarrier(
+        vk::PipelineStageFlagBits::eDrawIndirect, // TODO
+        vk::PipelineStageFlagBits::eDrawIndirect, // TODO
+        vk::DependencyFlagBits::eByRegion,        // TODO 
+        nullptr, nullptr, 
+        barrier
+    );
+    command_buffer_.end();
+
+    // Fuck, there has to be a good abstraction for this stuff...
+    vk::SubmitInfo submit_info(
+        0, nullptr, nullptr, 
+        1, &command_buffer_
+    );
+    queue_.submit(submit_info, nullptr);
+    queue_.waitIdle();
 }
