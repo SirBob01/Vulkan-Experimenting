@@ -28,6 +28,10 @@ class PhysicalDevice {
     vk::PhysicalDevice handle_;
     vk::SurfaceKHR surface_;
 
+    vk::PhysicalDeviceProperties properties_;
+    vk::PhysicalDeviceMemoryProperties memory_;
+    vk::PhysicalDeviceFeatures features_;
+
     SwapchainSupport swapchain_;
     AvailableQueues queues_; 
     
@@ -50,6 +54,9 @@ public:
     
     // Grab the handle to the Vulkan physical device
     vk::PhysicalDevice get_handle();
+
+    // Get the name of the device
+    std::string get_name();
         
     // Get the queue families
     AvailableQueues &get_available_queues();

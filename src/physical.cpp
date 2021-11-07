@@ -4,6 +4,10 @@ PhysicalDevice::PhysicalDevice(vk::PhysicalDevice handle, vk::SurfaceKHR surface
     handle_ = handle;
     surface_ = surface;
 
+    properties_ = handle_.getProperties();
+    memory_ = handle_.getMemoryProperties();
+    features_ = handle_.getFeatures();
+
     // Add the extensions required by all devices
     extensions_.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     get_command_queues();
@@ -75,6 +79,10 @@ vk::PhysicalDevice PhysicalDevice::get_handle() {
     return handle_;
 }  
 
+std::string PhysicalDevice::get_name() {
+    return properties_.deviceName;
+}
+
 AvailableQueues &PhysicalDevice::get_available_queues() {
     return queues_;
 }
@@ -93,33 +101,31 @@ const std::vector<const char *> &PhysicalDevice::get_extensions() {
 }
 
 vk::PhysicalDeviceMemoryProperties PhysicalDevice::get_memory() {
-    return handle_.getMemoryProperties();
+    return memory_;
 }
 
 vk::PhysicalDeviceLimits PhysicalDevice::get_limits() {
-    return handle_.getProperties().limits;
+    return properties_.limits;
 }
 
 int PhysicalDevice::get_score() {
-    auto properties = handle_.getProperties();
-    auto features = handle_.getFeatures();
     int score = 0;
 
     // Ensure all necessary features are present
     if(!is_complete() ||
        !is_supporting_extensions() ||
        !is_supporting_swapchain() ||
-       !features.geometryShader) {
+       !features_.geometryShader) {
         return 0;
     }
 
     // Dedicated GPU are prioritized
     auto discrete = vk::PhysicalDeviceType::eDiscreteGpu;
-    if(properties.deviceType == discrete) {
+    if(properties_.deviceType == discrete) {
         score += 1000;
     }
 
     // How much can be stored in VRAM?
-    score += properties.limits.maxImageDimension2D;
+    score += properties_.limits.maxImageDimension2D;
     return score;
 }
