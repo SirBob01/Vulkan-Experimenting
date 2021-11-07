@@ -42,8 +42,7 @@ RenderDebug::RenderDebug(vk::UniqueInstance &instance) {
     load_proxies(instance);
 
     // Create the debug messenger
-    auto severity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose |
-                    vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+    auto severity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
                     vk::DebugUtilsMessageSeverityFlagBitsEXT::eError;
     auto type = vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
                 vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
