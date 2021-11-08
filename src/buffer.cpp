@@ -158,6 +158,7 @@ void RenderBuffer::resuballoc(SubBuffer buffer, size_t size) {
         subbuffers_[i].offset += shift;
     }
     if(shift_length) {
+        // TODO: Can we do this without allocating a temporary buffer?
         RenderBuffer temp(
             shift_length, logical_, physical_, usage_, 
             properties_, command_buffer_, transfer_queue_
@@ -178,7 +179,7 @@ void RenderBuffer::resuballoc(SubBuffer buffer, size_t size) {
 }
 
 void RenderBuffer::check_subbuffer(SubBuffer buffer) {
-    if(buffer >= subbuffers_.size()) {
+    if(buffer >= subbuffers_.size() || recycle_.find(buffer) != recycle_.end()) {
         throw std::runtime_error("Invalid subbuffer index.");
     }
 }
@@ -218,6 +219,13 @@ char *RenderBuffer::get_mapped() {
 }
 
 SubBuffer RenderBuffer::suballoc(size_t size) {
+    // Check if there are previously deleted subbuffers to be recycled
+    if(recycle_.size()) {
+        SubBuffer id = *recycle_.begin();
+        recycle_.erase(id);
+        return id;
+    }
+
     size = round_up(size, offset_alignment_);
     if(subbuffers_.empty()) {
         subbuffers_.push_back({size, 0, 0});
@@ -322,4 +330,10 @@ void RenderBuffer::pop(SubBuffer buffer, size_t length) {
 void RenderBuffer::clear(SubBuffer buffer) {
     check_subbuffer(buffer);
     subbuffers_[buffer].filled = 0;
+}
+
+void RenderBuffer::delete_subbuffer(SubBuffer buffer) {
+    check_subbuffer(buffer);
+    subbuffers_[buffer].filled = 0;
+    recycle_.insert(buffer);
 }

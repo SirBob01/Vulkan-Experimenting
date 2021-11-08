@@ -5,6 +5,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include <cstring>
+#include <set>
 
 #include "physical.h"
 #include "util.h"
@@ -12,8 +13,9 @@
 // An integer handle to a SubBuffer in a buffer
 using SubBuffer = int;
 
-// Wrapper class for Vulkan buffer objects
-// User is responsible for updating command buffer listeners
+// RenderBuffer represents an allocated block of memory in
+// the device. It can be resized similar to realloc and
+// subbuffers can be allocated from it.
 class RenderBuffer {
     vk::Device logical_;
     PhysicalDevice &physical_;
@@ -40,6 +42,7 @@ class RenderBuffer {
     };
 
     std::vector<SubBufferData> subbuffers_;
+    std::set<SubBuffer> recycle_;
 
     // Initialize the buffer handle
     void initialize_buffer();
@@ -116,6 +119,9 @@ public:
 
     // Clear the contents of a subbuffer
     void clear(SubBuffer buffer);
+
+    // Delete a subbuffer to be recycled on the next call to suballoc()
+    void delete_subbuffer(SubBuffer buffer);
 };
 
 #endif
