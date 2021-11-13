@@ -21,7 +21,6 @@
 
 #include "physical.h"
 #include "texture.h"
-#include "commands.h"
 #include "buffer.h"
 #include "debug.h"
 #include "util.h"
@@ -69,18 +68,14 @@ struct UniformBufferObject {
     alignas(16) glm::mat4 proj;
 };
 
+struct MeshSubBuffer {
+    SubBuffer vertexes;
+    SubBuffer indexes;
+};
+
 // TODO: Implement better command buffer management
 // Idea: Create classes of command pools (static/dynamic)
 class Renderer {
-    std::vector<RVertex> vertices_ = {
-        {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-        {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
-    };
-    std::vector<uint16_t> indices_ = {
-        0, 1, 2
-    };
-
     SDL_Window *window_;
 
     // Required extensions and validation layers
@@ -128,7 +123,7 @@ class Renderer {
 
     // Command buffer (recording commands)
     std::vector<vk::UniqueCommandBuffer> graphics_commands_;
-    vk::UniqueCommandBuffer single_command_; // For copying
+    vk::UniqueCommandBuffer transfer_commands_; // For copying
 
     // Command Queues (submitting commands)
     AvailableQueues queues_;
@@ -140,7 +135,7 @@ class Renderer {
     // Object buffer is a one-size-fits-all for vertex and index data
     std::unique_ptr<RenderBuffer> staging_buffer_;
     std::unique_ptr<RenderBuffer> object_buffer_;
-    SubBuffer index_subbuffer_, vertex_subbuffer_;
+    std::vector<MeshSubBuffer> mesh_subbuffers_;
     size_t buffer_size_;
 
     // Uniform buffers
@@ -163,6 +158,8 @@ class Renderer {
     // Clear value for viewport refresh
     vk::ClearValue clear_value_;
 
+    bool vsync_ = false;
+
     // Get all required Vulkan extensions from SDL
     void get_extensions() {
         unsigned int count;
@@ -178,6 +175,7 @@ class Renderer {
             for(auto &extension : extensions_) {
                 std::cerr << "* " << extension << "\n";
             }
+            std::cerr << "\n";
         }
     }
 
@@ -204,7 +202,7 @@ class Renderer {
             VK_MAKE_VERSION(1, 0, 0),    // Application version
             "Dynamo-Engine",             // Engine name
             VK_MAKE_VERSION(1, 0, 0),    // Engine version
-            VK_MAKE_VERSION(1, 1, 0)     // Vulkan API version
+            VK_MAKE_VERSION(1, 2, 0)     // Vulkan API version
         );
 
         std::vector<vk::ValidationFeatureEnableEXT> layer_extensions = {
@@ -251,13 +249,6 @@ class Renderer {
     // Choose the best available physical device
     void create_physical_device() {
         auto devices = instance_->enumeratePhysicalDevices();
-        if constexpr(DEBUG) {
-            std::cerr << "Physical Devices:\n";
-            for(auto &physical : devices) {
-                auto properties = physical.getProperties();
-                std::cerr << "* " << properties.deviceName << "\n";
-            }
-        }
 
         PhysicalDevice best(devices[0], surface_.get());
         for(auto &physical : devices) {
@@ -266,6 +257,16 @@ class Renderer {
                 best = card;
             }
         }
+        
+        if constexpr(DEBUG) {
+            std::cerr << "Physical Devices:\n";
+            for(auto &physical : devices) {
+                auto properties = physical.getProperties();
+                std::cerr << "* " << properties.deviceName << "\n";
+            }
+            std::cerr << best.get_name() << " selected.\n\n";
+        }
+
         if(!best.get_score()) {
             throw std::runtime_error("Vulkan could not find suitable GPU.");
         }
@@ -274,6 +275,7 @@ class Renderer {
     }
 
     // Create the logical device from the chosen physical device
+    // Generate the required queues for this device
     void create_logical_device() {
         auto physical_handle = physical_->get_handle();
         queues_ = physical_->get_available_queues();
@@ -359,7 +361,10 @@ class Renderer {
     vk::PresentModeKHR get_swapchain_presentation(const 
                            std::vector<vk::PresentModeKHR> &supported) {
         for(auto &mode : supported) {
-            if(mode == vk::PresentModeKHR::eMailbox) {
+            if(!vsync_ && mode == vk::PresentModeKHR::eImmediate) {
+                return mode;
+            }
+            else if(mode == vk::PresentModeKHR::eMailbox) {
                 return mode;
             }
         }
@@ -712,7 +717,7 @@ class Renderer {
         );
         pipeline_ = logical_->createGraphicsPipelineUnique(
             nullptr, pipeline_info
-        );
+        ).value;
     }
 
     // Create the framebuffers for each swapchain image
@@ -747,7 +752,7 @@ class Renderer {
 
         // Commands for the transfer queue
         vk::CommandPoolCreateInfo transfer_info(
-            vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+            vk::CommandPoolCreateFlags(),
             queues_.transfer.index
         );
         transfer_pool_ = logical_->createCommandPoolUnique(transfer_info);
@@ -771,7 +776,7 @@ class Renderer {
             vk::CommandBufferLevel::ePrimary,
             1
         );
-        single_command_ = std::move(
+        transfer_commands_ = std::move(
             logical_->allocateCommandBuffersUnique(copy_alloc_info)[0]
         );
 
@@ -782,7 +787,7 @@ class Renderer {
             vk::MemoryPropertyFlagBits::eHostVisible | 
             vk::MemoryPropertyFlagBits::eHostCoherent |
             vk::MemoryPropertyFlagBits::eHostCached,
-            single_command_.get(), transfer_queue_
+            transfer_commands_.get(), transfer_pool_.get(), transfer_queue_
         );
         staging_buffer_->suballoc(buffer_size_);
     }
@@ -794,37 +799,13 @@ class Renderer {
         object_buffer_ = std::make_unique<RenderBuffer>(
             buffer_size_, logical_.get(), *physical_,
             usage, vk::MemoryPropertyFlagBits::eDeviceLocal,
-            single_command_.get(), transfer_queue_
-        );
-
-        // Copy the index data
-        int index_len = sizeof(indices_[0]) * indices_.size();
-        int vertex_len = sizeof(vertices_[0]) * vertices_.size();
-
-
-        index_subbuffer_ = object_buffer_->suballoc(index_len);
-        staging_buffer_->clear(0);
-        staging_buffer_->copy(0, &indices_[0], index_len);
-        staging_buffer_->copy_buffer(
-            *object_buffer_, 
-            index_len, 
-            0, 
-            index_subbuffer_
-        );    
-
-        // Copy the vertex data
-        vertex_subbuffer_ = object_buffer_->suballoc(vertex_len);
-        staging_buffer_->clear(0);
-        staging_buffer_->copy(0, &vertices_[0], vertex_len);
-        staging_buffer_->copy_buffer(
-            *object_buffer_, 
-            vertex_len, 
-            0, 
-            vertex_subbuffer_
+            transfer_commands_.get(), transfer_pool_.get(), transfer_queue_
         );
     }
 
     // Create a uniform buffer per swapchain image
+    // This is where we store global data that is passed to all shaders
+    // E.g., camera matrix, mouse pointer location, screen size, etc.
     void create_uniform_buffer() {
         uniform_buffer_ = std::make_unique<RenderBuffer>(
             buffer_size_, logical_.get(), *physical_, 
@@ -832,7 +813,7 @@ class Renderer {
             vk::MemoryPropertyFlagBits::eHostVisible |
             vk::MemoryPropertyFlagBits::eHostCoherent |
             vk::MemoryPropertyFlagBits::eHostCached,
-            single_command_.get(), transfer_queue_
+            transfer_commands_.get(), transfer_pool_.get(), transfer_queue_
         );
 
         // Ensure buffer offsets fit alignment requirements
@@ -922,45 +903,48 @@ class Renderer {
                 render_begin_info, 
 
                 // Render pass commands embedded on primary command buffer
-                // TODO: Use secondary buffers for multithreaded rendering
-                //       Secondary buffers are hidden from CPU but can be
-                //       called by primary command buffers
                 vk::SubpassContents::eInline
             );
 
-            // Bind the buffer to the graphics pipeline
+            // Bind the command buffer to the graphics pipeline
             graphics_commands_[i]->bindPipeline(
                 vk::PipelineBindPoint::eGraphics,
                 pipeline_.get()
             );
 
-            // Bind the vertex and index sub-buffers to the command queue
-            std::vector<vk::DeviceSize> offsets = {
-                object_buffer_->get_offset(vertex_subbuffer_)
-            };
-            graphics_commands_[i]->bindVertexBuffers(
-                0, object_buffer_->get_handle(), offsets
-            );
-            graphics_commands_[i]->bindIndexBuffer(
-                object_buffer_->get_handle(), 
-                object_buffer_->get_offset(index_subbuffer_), 
-                vk::IndexType::eUint16
-            );
+            // Draw each mesh
+            // TODO: Use secondary buffers for multithreaded rendering
+            //       Secondary buffers are hidden from CPU but can be
+            //       called by primary command buffers
+            for(auto &mesh_subbuffer : mesh_subbuffers_) {
+                // Bind the vertex and index sub-buffers to the command queue
+                std::vector<vk::DeviceSize> offsets = {
+                    object_buffer_->get_offset(mesh_subbuffer.vertexes)
+                };
+                graphics_commands_[i]->bindVertexBuffers(
+                    0, object_buffer_->get_handle(), offsets
+                );
+                graphics_commands_[i]->bindIndexBuffer(
+                    object_buffer_->get_handle(), 
+                    object_buffer_->get_offset(mesh_subbuffer.indexes), 
+                    vk::IndexType::eUint16
+                );
 
-            // Bind desccriptor sets
-            std::vector<vk::DescriptorSet> bound_descriptors = {
-                descriptor_sets_[i].get()
-            };
-            graphics_commands_[i]->bindDescriptorSets(
-                vk::PipelineBindPoint::eGraphics, layout_.get(),
-                0, bound_descriptors, nullptr
-            );
+                // Bind desccriptor sets
+                std::vector<vk::DescriptorSet> bound_descriptors = {
+                    descriptor_sets_[i].get()
+                };
+                graphics_commands_[i]->bindDescriptorSets(
+                    vk::PipelineBindPoint::eGraphics, layout_.get(),
+                    0, bound_descriptors, nullptr
+                );
 
-            // Record the actual draw command!!!!
-            graphics_commands_[i]->drawIndexed(
-                object_buffer_->get_subfill(index_subbuffer_) / sizeof(uint16_t),
-                1, 0, 0, 0
-            );
+                // Record the actual draw command!!!!
+                graphics_commands_[i]->drawIndexed(
+                    object_buffer_->get_subfill(mesh_subbuffer.indexes) / sizeof(uint16_t),
+                    1, 0, 0, 0
+                );
+            }
 
             // Stop recording
             graphics_commands_[i]->endRenderPass();
@@ -997,6 +981,7 @@ class Renderer {
     }
 
     // Update the uniform buffers every frame
+    // This is where we update view and projection matrices
     void update_uniform_buffer(uint32_t image_index) {
         static auto start_time = std::chrono::high_resolution_clock::now();
         auto current_time = std::chrono::high_resolution_clock::now();
@@ -1110,29 +1095,32 @@ public:
 
     // Update the display
     void refresh() {
-        logical_->waitForFences(
+        vk::Result result;
+        result = logical_->waitForFences(
             fences_[current_frame_].get(), 
             true, UINT64_MAX
         );
 
         // Grab the next available image to render to
         uint32_t image_index;
-        vk::Result result = logical_->acquireNextImageKHR(
+        result = logical_->acquireNextImageKHR(
             swapchain_.get(),
             UINT64_MAX,
             // Signal that a new frame is available
             image_available_signal_[current_frame_].get(),
             nullptr, &image_index
         );
-        if(result == vk::Result::eSuboptimalKHR || 
-           result == vk::Result::eErrorOutOfDateKHR) {
+        if(result == vk::Result::eErrorOutOfDateKHR) {
             reset_swapchain();
             return;
+        }
+        else if(result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
+            throw std::runtime_error("Could not acquire image from the swapchain.");
         }
         update_uniform_buffer(image_index);
 
         if(active_fences_[image_index]) {
-            logical_->waitForFences(
+            result = logical_->waitForFences(
                 active_fences_[image_index],
                 true, UINT64_MAX
             );
@@ -1167,18 +1155,25 @@ public:
             1, &swapchain_.get(),
             &image_index, nullptr
         );
-        try {
-            // For some reason, this throws an exception instead...
-            present_queue_.presentKHR(present_info);
-            present_queue_.waitIdle();
-        }
-        catch(vk::OutOfDateKHRError &err) {
-            reset_swapchain();
-            return;
-        }
+        result = present_queue_.presentKHR(present_info);
 
+        // If this fails, we probably need to reset the swapchain
+        if(result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR) {
+            reset_swapchain();
+        }
+        else if(result != vk::Result::eSuccess) {
+            throw std::runtime_error("Failed to draw frame.");
+        }
         current_frame_++;
         current_frame_ %= max_frames_processing_;
+    }
+
+    void set_vsync(bool vsync) {
+        vsync_ = vsync;
+    }
+
+    bool get_vsync() {
+        return vsync_;
     }
 
     // Set the background fill color
@@ -1190,43 +1185,83 @@ public:
     }
 
     // Testing dynamic subbuffer appending
+    // TODO: In practice, we will also record a secondary command buffer in a new thread that draws this new mesh
+    // ALGORITHM FOR RENDERING ANY MESH
+    // * Allocate new subbuffers for the vertex and index data (keep track of an array of these subbuffers)
+    // * Record a new secondary command buffer that renders this mesh
+    // * At the end of each frame (right before render call), merge secondary buffers with primary
+    // * Re-record primary command buffer and submit to queue
+    // * Clear the index and staging buffers
+
+    // Alternative? Record secondary buffer ONLY when something new is added
     void add_triangle() {
-        std::vector<RVertex> vertices = {
-            {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
-        };
-        std::vector<uint16_t> indices = {
-            2, 3, 0
-        };
+        std::vector<RVertex> vertices;
+        std::vector<uint16_t> indices;
+        float random = (float)std::rand() / (float)RAND_MAX;
+        if(random < 0.5) {
+            vertices = {
+                {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+                {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+                {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+            };
+            indices = {
+                0, 1, 2
+            };
+        }
+        else {
+            vertices = {
+                {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+                {{0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+                {{0.5f, 0.5f}, {1.0f, 0.0f, 0.0f}},
+                {{-0.5f, 0.5f}, {1.0f, 0.0f, 0.0f}},
+            };
+            indices = {
+                0, 1, 2, 2, 3, 0
+            };
+
+        }
+
+        int index_len_bytes = sizeof(indices[0]) * indices.size();
+        int vertex_len_bytes = sizeof(vertices[0]) * vertices.size();
 
         // Copy the index data
-        int index_len = sizeof(indices[0]) * indices.size();
+        SubBuffer indexes = object_buffer_->suballoc(index_len_bytes);
         staging_buffer_->clear(0);
-        staging_buffer_->copy(0, &indices[0], index_len);
+        staging_buffer_->copy(0, &indices[0], index_len_bytes);
         staging_buffer_->copy_buffer(
             *object_buffer_, 
-            index_len, 
+            index_len_bytes, 
             0, 
-            index_subbuffer_
-        );
+            indexes
+        );    
+
         // Copy the vertex data
-        int vertex_len = sizeof(vertices[0]) * vertices.size();
+        SubBuffer vertexes = object_buffer_->suballoc(vertex_len_bytes);
         staging_buffer_->clear(0);
-        staging_buffer_->copy(0, &vertices[0], vertex_len);
+        staging_buffer_->copy(0, &vertices[0], vertex_len_bytes);
         staging_buffer_->copy_buffer(
             *object_buffer_, 
-            vertex_len, 
+            vertex_len_bytes, 
             0, 
-            vertex_subbuffer_
+            vertexes
         );
+
+        mesh_subbuffers_.push_back({
+            vertexes,
+            indexes
+        });
         record_commands();
     }
 
     // Testing dynamic subbuffer removal
     void remove_triangle() {
-        for(int i = 0; i < 3; i++) {        
-            object_buffer_->pop(index_subbuffer_, sizeof(indices_[0]));
+        if(mesh_subbuffers_.empty()) {
+            return;
         }
-        object_buffer_->pop(vertex_subbuffer_, sizeof(vertices_[0]));
+        MeshSubBuffer mesh_subbuffer = mesh_subbuffers_.back();
+        object_buffer_->delete_subbuffer(mesh_subbuffer.indexes);
+        object_buffer_->delete_subbuffer(mesh_subbuffer.vertexes);
+        mesh_subbuffers_.pop_back();
         record_commands();
     }
 
