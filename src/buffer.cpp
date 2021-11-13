@@ -6,6 +6,7 @@ RenderBuffer::RenderBuffer(size_t length,
                            vk::BufferUsageFlags usage, 
                            vk::MemoryPropertyFlags properties,
                            vk::CommandBuffer &command_buffer, 
+                           vk::CommandPool &command_pool,
                            vk::Queue &transfer_queue) : physical_(physical) {
     logical_ = logical;
     length_ = length;
@@ -17,6 +18,7 @@ RenderBuffer::RenderBuffer(size_t length,
     properties_ = properties;
 
     command_buffer_ = command_buffer;
+    command_pool_ = command_pool;
     transfer_queue_ = transfer_queue;
 
     host_visible_ = static_cast<bool>(
@@ -90,6 +92,10 @@ void RenderBuffer::copy_to_offset(RenderBuffer &target, size_t length,
     if(length + dst_offset > target.length_) {
         target.resize(length + dst_offset);
     }
+    logical_.resetCommandPool(
+        command_pool_,
+        vk::CommandPoolResetFlagBits::eReleaseResources
+    );
     vk::CommandBufferBeginInfo begin_info(
         vk::CommandBufferUsageFlagBits::eOneTimeSubmit
     );
@@ -115,7 +121,7 @@ void RenderBuffer::resize(size_t size) {
     // Copy data to temporary buffer
     RenderBuffer temp(
         length_, logical_, physical_, usage_, 
-        properties_, command_buffer_, transfer_queue_
+        properties_, command_buffer_, command_pool_, transfer_queue_
     );
     copy_to_offset(temp, length_, 0, 0);
     if(host_visible_) {
@@ -161,7 +167,7 @@ void RenderBuffer::resuballoc(SubBuffer buffer, size_t size) {
         // TODO: Can we do this without allocating a temporary buffer?
         RenderBuffer temp(
             shift_length, logical_, physical_, usage_, 
-            properties_, command_buffer_, transfer_queue_
+            properties_, command_buffer_, command_pool_, transfer_queue_
         );
         copy_to_offset(
             temp, 
@@ -305,7 +311,7 @@ void RenderBuffer::remove(SubBuffer buffer, size_t offset, size_t length) {
     if(shift_length) {
         RenderBuffer temp(
             shift_length, logical_, physical_, usage_, 
-            properties_, command_buffer_, transfer_queue_
+            properties_, command_buffer_, command_pool_, transfer_queue_
         );
         copy_to_offset(
             temp, shift_length, 

@@ -27,6 +27,7 @@ class RenderBuffer {
     vk::MemoryPropertyFlags properties_;
 
     vk::CommandBuffer command_buffer_;
+    vk::CommandPool command_pool_;
     vk::Queue transfer_queue_;
 
     size_t offset_alignment_;
@@ -72,6 +73,7 @@ public:
                  vk::BufferUsageFlags usage, 
                  vk::MemoryPropertyFlags properties,
                  vk::CommandBuffer &command_buffer, 
+                 vk::CommandPool &command_pool,
                  vk::Queue &transfer_queue);
     ~RenderBuffer();
 
