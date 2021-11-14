@@ -1238,14 +1238,13 @@ public:
             1, &swapchain_.get(),
             &image_index, nullptr
         );
-        result = present_queue_.presentKHR(present_info);
 
         // If this fails, we probably need to reset the swapchain
-        if(result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR) {
+        try {
+            result = present_queue_.presentKHR(present_info);
+        } 
+        catch(vk::OutOfDateKHRError e) {
             reset_swapchain();
-        }
-        else if(result != vk::Result::eSuccess) {
-            throw std::runtime_error("Failed to draw frame.");
         }
         current_frame_++;
         current_frame_ %= max_frames_processing_;
@@ -1315,6 +1314,8 @@ public:
             vertexes
         );
 
+        // TODO: Add custom texture
+        // Give each mesh its own descriptor set
         mesh_subbuffers_.push_back({
             vertexes,
             indexes
