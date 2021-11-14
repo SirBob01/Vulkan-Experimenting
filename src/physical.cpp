@@ -115,7 +115,8 @@ int PhysicalDevice::get_score() {
     if(!is_complete() ||
        !is_supporting_extensions() ||
        !is_supporting_swapchain() ||
-       !features_.geometryShader) {
+       !features_.geometryShader ||
+       !features_.samplerAnisotropy) {
         return 0;
     }
 

@@ -13,6 +13,7 @@
 #include <chrono>
 
 #include <vector>
+#include <unordered_map>
 
 #include <exception>
 #include <iostream>
@@ -37,6 +38,7 @@ struct RVertex {
     // Interleaved vertex attributes
     glm::vec2 pos;
     glm::vec3 color;
+    glm::vec2 tex_coord;
 
     static vk::VertexInputBindingDescription get_binding_description() {
         vk::VertexInputBindingDescription desc(
@@ -46,8 +48,8 @@ struct RVertex {
         return desc;
     }
 
-    static std::array<vk::VertexInputAttributeDescription, 2> get_attribute_descriptions() {
-        std::array<vk::VertexInputAttributeDescription, 2> desc;
+    static std::array<vk::VertexInputAttributeDescription, 3> get_attribute_descriptions() {
+        std::array<vk::VertexInputAttributeDescription, 3> desc;
         desc[0] = {
             0, 0, 
             vk::Format::eR32G32Sfloat, 
@@ -57,6 +59,11 @@ struct RVertex {
             1, 0, 
             vk::Format::eR32G32B32Sfloat, 
             offsetof(RVertex, color) // Memory offset of color member
+        };
+        desc[2] = {
+            2, 0,
+            vk::Format::eR32G32Sfloat,
+            offsetof(RVertex, tex_coord)
         };
         return desc;
     }
@@ -140,6 +147,10 @@ class Renderer {
 
     // Uniform buffers
     std::unique_ptr<RenderBuffer> uniform_buffer_;
+
+    // Texture handling
+    std::unique_ptr<Texture> texture_;
+    vk::UniqueSampler texture_sampler_;
 
     // Semaphores
     // Ensures correct ordering between graphic and present commands
@@ -300,6 +311,9 @@ class Renderer {
             queue_info.push_back(info);
         }
 
+        vk::PhysicalDeviceFeatures enabled_features;
+        enabled_features.samplerAnisotropy = true;
+
         auto &device_extensions = physical_->get_extensions();
         vk::DeviceCreateInfo create_info(
             vk::DeviceCreateFlags(),
@@ -308,7 +322,7 @@ class Renderer {
             0, nullptr,
             device_extensions.size(),
             &device_extensions[0],
-            nullptr
+            &enabled_features
         );
         logical_ = physical_handle.createDeviceUnique(create_info);
         
@@ -468,14 +482,24 @@ class Renderer {
     // Describes the data passed to a shader stage
     // Can add more stuff for dynamic shader behavior
     void create_descriptor_layout() {
-        vk::DescriptorSetLayoutBinding binding(
+        // UBO binding
+        vk::DescriptorSetLayoutBinding ubo_layout_binding(
             0, vk::DescriptorType::eUniformBuffer, 1,
             vk::ShaderStageFlagBits::eVertex
         );
 
+        // Image sampler binding
+        vk::DescriptorSetLayoutBinding sampler_layout_binding(
+            1, vk::DescriptorType::eCombinedImageSampler, 1,
+            vk::ShaderStageFlagBits::eFragment
+        );
+
+        std::vector<vk::DescriptorSetLayoutBinding> bindings = {
+            ubo_layout_binding, sampler_layout_binding
+        };
         vk::DescriptorSetLayoutCreateInfo create_info(
             vk::DescriptorSetLayoutCreateFlags(),
-            1, &binding
+            bindings.size(), &bindings[0]
         );
         descriptor_layout_ = logical_->createDescriptorSetLayoutUnique(
             create_info
@@ -771,13 +795,13 @@ class Renderer {
 
         // Create a command buffer for copying between data buffers
         // This is not attached to any pipeline stage or semaphores
-        vk::CommandBufferAllocateInfo copy_alloc_info(
+        vk::CommandBufferAllocateInfo transfer_alloc_info(
             transfer_pool_.get(),
             vk::CommandBufferLevel::ePrimary,
             1
         );
         transfer_commands_ = std::move(
-            logical_->allocateCommandBuffersUnique(copy_alloc_info)[0]
+            logical_->allocateCommandBuffersUnique(transfer_alloc_info)[0]
         );
 
         // Create the staging buffer for CPU to GPU copies
@@ -790,6 +814,38 @@ class Renderer {
             transfer_commands_.get(), transfer_pool_.get(), transfer_queue_
         );
         staging_buffer_->suballoc(buffer_size_);
+    }
+
+    // Create a sampler for loaded textures
+    void create_texture_sampler() {
+        vk::SamplerCreateInfo sampler_info(
+            vk::SamplerCreateFlags(),
+
+            // Magnification and minification filters
+            vk::Filter::eLinear,
+            vk::Filter::eLinear,
+
+            vk::SamplerMipmapMode::eLinear,
+            
+            // U, V, W address mode
+            vk::SamplerAddressMode::eRepeat,
+            vk::SamplerAddressMode::eRepeat,
+            vk::SamplerAddressMode::eRepeat,
+
+            // Mipping
+            0.0f,
+            true,
+            physical_->get_limits().maxSamplerAnisotropy,
+            false,
+            vk::CompareOp::eAlways,
+
+            // Min and max LOD
+            0.0f, 0.0f,
+
+            vk::BorderColor::eIntOpaqueBlack,
+            false
+        );
+        texture_sampler_ = logical_->createSamplerUnique(sampler_info);
     }
 
     // Create the object buffer
@@ -828,15 +884,22 @@ class Renderer {
 
     // Create the pool that manages all descriptor sets
     void create_descriptor_pool() {
-        vk::DescriptorPoolSize size(
+        vk::DescriptorPoolSize ubo_size(
             vk::DescriptorType::eUniformBuffer,
             images_.size()
         );
+        vk::DescriptorPoolSize sampler_size(
+            vk::DescriptorType::eCombinedImageSampler,
+            images_.size()
+        );
 
+        std::vector<vk::DescriptorPoolSize> pool_sizes = {
+            ubo_size, sampler_size
+        };
         vk::DescriptorPoolCreateInfo create_info(
             vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
             images_.size(),
-            1, &size
+            pool_sizes.size(), &pool_sizes[0]
         );
         descriptor_pool_ = logical_->createDescriptorPoolUnique(
             create_info
@@ -860,20 +923,37 @@ class Renderer {
         );
 
         // Map each UBO in uniform_buffer_ to a descriptor set
-        size_t unit = sizeof(UniformBufferObject);
         for(int i = 0; i < uniform_buffer_->get_subbuffer_count(); i++) {
+            // Uniform buffer descriptor set
             vk::DescriptorBufferInfo buffer_info(
                 uniform_buffer_->get_handle(), 
-                uniform_buffer_->get_offset(i), unit
+                uniform_buffer_->get_offset(i), 
+                sizeof(UniformBufferObject)
             );
-            vk::WriteDescriptorSet write_info(
+            // Image sampler descriptor set
+            vk::DescriptorImageInfo image_info(
+                texture_sampler_.get(),
+                texture_->get_view(),
+                vk::ImageLayout::eShaderReadOnlyOptimal
+            );
+
+
+            std::vector<vk::WriteDescriptorSet> descriptor_writes;
+            descriptor_writes.push_back({
                 descriptor_sets_[i].get(),
                 0, // Binding value in shader layout 
                 0, 1,
                 vk::DescriptorType::eUniformBuffer,
-                nullptr, &buffer_info, nullptr   
-            );
-            logical_->updateDescriptorSets(write_info, nullptr);
+                &image_info, &buffer_info, nullptr
+            });
+            descriptor_writes.push_back({
+                descriptor_sets_[i].get(),
+                1,
+                0, 1,
+                vk::DescriptorType::eCombinedImageSampler,
+                &image_info, nullptr, nullptr
+            });
+            logical_->updateDescriptorSets(descriptor_writes, nullptr);
         }
     }
 
@@ -1070,6 +1150,9 @@ public:
             create_framebuffers();
             create_command_pool();
             create_command_buffers();
+            
+            load_texture("../assets/texture.jpg");
+            create_texture_sampler();
 
             create_object_buffer();
             create_uniform_buffer();
@@ -1197,29 +1280,15 @@ public:
     void add_triangle() {
         std::vector<RVertex> vertices;
         std::vector<uint16_t> indices;
-        float random = (float)std::rand() / (float)RAND_MAX;
-        if(random < 0.5) {
-            vertices = {
-                {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-                {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-                {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
-            };
-            indices = {
-                0, 1, 2
-            };
-        }
-        else {
-            vertices = {
-                {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-                {{0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-                {{0.5f, 0.5f}, {1.0f, 0.0f, 0.0f}},
-                {{-0.5f, 0.5f}, {1.0f, 0.0f, 0.0f}},
-            };
-            indices = {
-                0, 1, 2, 2, 3, 0
-            };
-
-        }
+        vertices = {
+            {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+            {{0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
+            {{0.5f, 0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}},
+            {{-0.5f, 0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 1.0f}},
+        };
+        indices = {
+            0, 1, 2, 2, 3, 0
+        };
 
         int index_len_bytes = sizeof(indices[0]) * indices.size();
         int vertex_len_bytes = sizeof(vertices[0]) * vertices.size();
@@ -1280,6 +1349,17 @@ public:
         }
         staging_buffer_->clear(0);
         staging_buffer_->copy(0, pixels, image_size);
+
+
+        texture_ = std::make_unique<Texture>(
+            logical_.get(), 
+            *physical_.get(),
+            graphics_pool_.get(),
+            graphics_queue_,
+            *staging_buffer_.get(),
+            width, height
+        );
+        staging_buffer_->clear(0);
         stbi_image_free(pixels);
     }
 };

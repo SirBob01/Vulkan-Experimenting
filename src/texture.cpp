@@ -2,7 +2,7 @@
 
 Texture::Texture(vk::Device &logical,
                  PhysicalDevice &physical,
-                 vk::CommandBuffer &command_buffer,
+                 vk::CommandPool &command_pool,
                  vk::Queue &queue,
                  RenderBuffer &texels, 
                  uint32_t width, uint32_t height) : physical_(physical) {
@@ -11,7 +11,10 @@ Texture::Texture(vk::Device &logical,
              vk::ImageUsageFlagBits::eSampled;
     properties_ = vk::MemoryPropertyFlagBits::eDeviceLocal;
 
-    command_buffer_ = command_buffer;
+    width_ = width;
+    height_ = height;
+
+    command_pool_ = command_pool;
     queue_ = queue;
 
     // Create the image
@@ -24,15 +27,27 @@ Texture::Texture(vk::Device &logical,
         1, // Array layers
         vk::SampleCountFlagBits::e1,
         vk::ImageTiling::eOptimal,
-        usage_
+        usage_,
+        vk::SharingMode::eExclusive
     );
     image_ = logical_.createImageUnique(image_info);
 
+    // Load image data
     alloc_memory();
     transition_layout(
         vk::ImageLayout::eUndefined, 
         vk::ImageLayout::eTransferDstOptimal
     );
+    copy_from_buffer(texels);
+    transition_layout(
+        vk::ImageLayout::eTransferDstOptimal, 
+        vk::ImageLayout::eShaderReadOnlyOptimal
+    );
+    create_view();
+}
+
+Texture::~Texture() {
+    image_.reset();
 }
 
 void Texture::alloc_memory() {
@@ -49,7 +64,7 @@ void Texture::alloc_memory() {
         }
     }
     if(memory_type < 0) {
-        throw std::runtime_error("Vulkan failed to create texture.");
+        throw std::runtime_error("Vulkan failed to allocate memory for a texture.");
     }
     vk::MemoryAllocateInfo alloc_info(
         requirements.size,
@@ -65,34 +80,116 @@ void Texture::alloc_memory() {
 
 void Texture::transition_layout(vk::ImageLayout from, vk::ImageLayout to) {
     vk::ImageMemoryBarrier barrier(
-        vk::AccessFlagBits::eVertexAttributeRead, // TODO src
-        vk::AccessFlagBits::eVertexAttributeRead, // TODO dst
+        vk::AccessFlagBits::eNoneKHR,
+        vk::AccessFlagBits::eNoneKHR,
         from, to,
         0, 0,
         image_.get(),
         {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}
     );
+    vk::PipelineStageFlags src_stage, dst_stage;
+    if(from == vk::ImageLayout::eUndefined && to == vk::ImageLayout::eTransferDstOptimal) {
+        barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
 
-    // TODO: Abstract away command buffer stuff
-    // I'm beginning to repeat myself (see RenderBuffer copy)
+        src_stage = vk::PipelineStageFlagBits::eTopOfPipe;
+        dst_stage = vk::PipelineStageFlagBits::eTransfer;
+    }
+    else if(from == vk::ImageLayout::eTransferDstOptimal && to == vk::ImageLayout::eShaderReadOnlyOptimal) {
+        barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+        src_stage = vk::PipelineStageFlagBits::eTransfer;
+        dst_stage = vk::PipelineStageFlagBits::eFragmentShader;
+    }
+    else {
+        throw std::runtime_error("Texture loading failed, layout transition is unsupported.");
+    }
+
+    vk::CommandBufferAllocateInfo alloc_info(
+        command_pool_,
+        vk::CommandBufferLevel::ePrimary,
+        1
+    );
+    vk::UniqueCommandBuffer command_buffer = std::move(
+        logical_.allocateCommandBuffersUnique(alloc_info)[0]
+    );
+
     vk::CommandBufferBeginInfo begin_info(
         vk::CommandBufferUsageFlagBits::eOneTimeSubmit
     );
-    command_buffer_.begin(begin_info);
-    command_buffer_.pipelineBarrier(
-        vk::PipelineStageFlagBits::eDrawIndirect, // TODO
-        vk::PipelineStageFlagBits::eDrawIndirect, // TODO
-        vk::DependencyFlagBits::eByRegion,        // TODO 
+    command_buffer->begin(begin_info);
+    command_buffer->pipelineBarrier(
+        src_stage,
+        dst_stage,
+        vk::DependencyFlagBits::eByRegion, // TODO 
         nullptr, nullptr, 
         barrier
     );
-    command_buffer_.end();
+    command_buffer->end();
 
-    // Fuck, there has to be a good abstraction for this stuff...
     vk::SubmitInfo submit_info(
         0, nullptr, nullptr, 
-        1, &command_buffer_
+        1, &command_buffer.get()
     );
     queue_.submit(submit_info, nullptr);
     queue_.waitIdle();
+}
+
+void Texture::copy_from_buffer(RenderBuffer &buffer) {
+    vk::CommandBufferAllocateInfo alloc_info(
+        command_pool_,
+        vk::CommandBufferLevel::ePrimary,
+        1
+    );
+    vk::UniqueCommandBuffer command_buffer = std::move(
+        logical_.allocateCommandBuffersUnique(alloc_info)[0]
+    );
+
+    vk::CommandBufferBeginInfo begin_info(
+        vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+    );
+    command_buffer->begin(begin_info);
+    vk::BufferImageCopy region(
+        0, 0, 0,
+        { vk::ImageAspectFlagBits::eColor, 0, 0, 1 },
+        {0, 0, 0},
+        {width_, height_, 1}  
+    );
+    command_buffer->copyBufferToImage(
+        buffer.get_handle(),
+        image_.get(), 
+        vk::ImageLayout::eTransferDstOptimal, 
+        1, 
+        &region
+    );
+    command_buffer->end();
+
+    vk::SubmitInfo submit_info(
+        0, nullptr, nullptr, 
+        1, &command_buffer.get()
+    );
+    queue_.submit(submit_info, nullptr);
+    queue_.waitIdle();
+}
+
+void Texture::create_view() {
+    vk::ImageViewCreateInfo view_info(
+        vk::ImageViewCreateFlags(),
+        image_.get(),
+        vk::ImageViewType::e2D,
+        vk::Format::eR8G8B8A8Srgb
+    );
+    view_info.subresourceRange = {
+        vk::ImageAspectFlagBits::eColor,
+        0, 1, 0, 1
+    };
+    view_ = logical_.createImageViewUnique(view_info);
+}
+
+vk::Image &Texture::get_image() {
+    return image_.get();    
+}
+
+vk::ImageView &Texture::get_view() {
+    return view_.get();
 }
