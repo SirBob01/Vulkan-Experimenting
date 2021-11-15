@@ -1329,6 +1329,9 @@ class Renderer {
             create_swapchain();
             create_views();
             
+            create_depth_image();
+            create_depth_view();
+            
             create_render_pass();
             create_graphics_pipeline();
 
