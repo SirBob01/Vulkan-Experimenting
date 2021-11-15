@@ -27,6 +27,8 @@ int main(int argc, char **argv) {
 
     // Instantiate Renderer class
     Renderer renderer(window);
+    Texture t1 = renderer.load_texture("../assets/texture.jpg");
+    Texture t2 = renderer.load_texture("../assets/hazard.png");
 
     SDL_Event e;
     bool running = true;
@@ -60,10 +62,16 @@ int main(int argc, char **argv) {
                     }
                 }
                 else if(e.key.keysym.sym == SDLK_t) {
-                    renderer.add_triangle();
+                    renderer.add_mesh(0);
+                }
+                else if(e.key.keysym.sym == SDLK_y) {
+                    renderer.add_mesh(t1);
+                }
+                else if(e.key.keysym.sym == SDLK_u) {
+                    renderer.add_mesh(t2);
                 }
                 else if(e.key.keysym.sym == SDLK_r) {
-                    renderer.remove_triangle();
+                    renderer.remove_mesh();
                 }
             }
         }

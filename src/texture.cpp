@@ -1,11 +1,12 @@
 #include "texture.h"
 
-Texture::Texture(vk::Device &logical,
-                 PhysicalDevice &physical,
-                 vk::CommandPool &command_pool,
-                 vk::Queue &queue,
-                 RenderBuffer &texels, 
-                 uint32_t width, uint32_t height) : physical_(physical) {
+TextureData::TextureData(vk::Device &logical, 
+                         PhysicalDevice &physical,
+                         vk::CommandPool &command_pool,
+                         vk::Queue &queue,
+                         RenderBuffer &staging_buffer,
+                         uint32_t width, 
+                         uint32_t height) : physical_(physical) {
     logical_ = logical;
     usage_ = vk::ImageUsageFlagBits::eTransferDst | 
              vk::ImageUsageFlagBits::eSampled;
@@ -38,7 +39,7 @@ Texture::Texture(vk::Device &logical,
         vk::ImageLayout::eUndefined, 
         vk::ImageLayout::eTransferDstOptimal
     );
-    copy_from_buffer(texels);
+    copy_from_buffer(staging_buffer);
     transition_layout(
         vk::ImageLayout::eTransferDstOptimal, 
         vk::ImageLayout::eShaderReadOnlyOptimal
@@ -46,11 +47,11 @@ Texture::Texture(vk::Device &logical,
     create_view();
 }
 
-Texture::~Texture() {
+TextureData::~TextureData() {
     image_.reset();
 }
 
-void Texture::alloc_memory() {
+void TextureData::alloc_memory() {
     auto requirements = logical_.getImageMemoryRequirements(
         image_.get()
     );
@@ -78,7 +79,7 @@ void Texture::alloc_memory() {
     );
 }
 
-void Texture::transition_layout(vk::ImageLayout from, vk::ImageLayout to) {
+void TextureData::transition_layout(vk::ImageLayout from, vk::ImageLayout to) {
     vk::ImageMemoryBarrier barrier(
         vk::AccessFlagBits::eNoneKHR,
         vk::AccessFlagBits::eNoneKHR,
@@ -135,7 +136,7 @@ void Texture::transition_layout(vk::ImageLayout from, vk::ImageLayout to) {
     queue_.waitIdle();
 }
 
-void Texture::copy_from_buffer(RenderBuffer &buffer) {
+void TextureData::copy_from_buffer(RenderBuffer &buffer) {
     vk::CommandBufferAllocateInfo alloc_info(
         command_pool_,
         vk::CommandBufferLevel::ePrimary,
@@ -172,7 +173,7 @@ void Texture::copy_from_buffer(RenderBuffer &buffer) {
     queue_.waitIdle();
 }
 
-void Texture::create_view() {
+void TextureData::create_view() {
     vk::ImageViewCreateInfo view_info(
         vk::ImageViewCreateFlags(),
         image_.get(),
@@ -186,10 +187,10 @@ void Texture::create_view() {
     view_ = logical_.createImageViewUnique(view_info);
 }
 
-vk::Image &Texture::get_image() {
-    return image_.get();    
+vk::Image &TextureData::get_image() {
+    return image_.get();
 }
 
-vk::ImageView &Texture::get_view() {
+vk::ImageView &TextureData::get_view() {
     return view_.get();
 }

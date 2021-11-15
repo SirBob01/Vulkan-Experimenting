@@ -7,8 +7,11 @@
 #include "buffer.h"
 #include "physical.h"
 
-// Holds texture data
-class Texture {
+// A unique handle to an existing texture
+using Texture = int;
+
+// Texture image data used as a descriptor
+class TextureData {
     vk::Device logical_;
     PhysicalDevice &physical_;
 
@@ -38,11 +41,14 @@ class Texture {
     void create_view();
 
 public:
-    Texture(vk::Device &logical, PhysicalDevice &physical,
-            vk::CommandPool &command_pool,
-            vk::Queue &queue,
-            RenderBuffer &texels, uint32_t width, uint32_t height);
-    ~Texture();
+    TextureData(vk::Device &logical, 
+                PhysicalDevice &physical,
+                vk::CommandPool &command_pool,
+                vk::Queue &queue,
+                RenderBuffer &staging_buffer, 
+                uint32_t width, 
+                uint32_t height);
+    ~TextureData();
 
     // Get the image this texture refers to
     vk::Image &get_image();

@@ -13,7 +13,6 @@
 #include <chrono>
 
 #include <vector>
-#include <unordered_map>
 
 #include <exception>
 #include <iostream>
@@ -34,16 +33,16 @@
 
 using ShaderBytes = std::vector<char>; // Vulkan shader bytecode for parsing
 
-struct RVertex {
+struct Vertex {
     // Interleaved vertex attributes
     glm::vec2 pos;
-    glm::vec3 color;
+    glm::vec4 color;
     glm::vec2 tex_coord;
 
     static vk::VertexInputBindingDescription get_binding_description() {
         vk::VertexInputBindingDescription desc(
             0,              // Index in array of bindings
-            sizeof(RVertex)  // Stride (memory buffer traversal)
+            sizeof(Vertex)  // Stride (memory buffer traversal)
         );
         return desc;
     }
@@ -53,20 +52,24 @@ struct RVertex {
         desc[0] = {
             0, 0, 
             vk::Format::eR32G32Sfloat, 
-            offsetof(RVertex, pos)   // Memory offset of position member
+            offsetof(Vertex, pos)   // Memory offset of position member
         };
         desc[1] = {
             1, 0, 
-            vk::Format::eR32G32B32Sfloat, 
-            offsetof(RVertex, color) // Memory offset of color member
+            vk::Format::eR32G32B32A32Sfloat, 
+            offsetof(Vertex, color) // Memory offset of color member
         };
         desc[2] = {
             2, 0,
             vk::Format::eR32G32Sfloat,
-            offsetof(RVertex, tex_coord)
+            offsetof(Vertex, tex_coord)
         };
         return desc;
     }
+};
+
+struct PushConstantObject {
+    int texture;
 };
 
 struct UniformBufferObject {
@@ -75,9 +78,10 @@ struct UniformBufferObject {
     alignas(16) glm::mat4 proj;
 };
 
-struct MeshSubBuffer {
+struct MeshData {
     SubBuffer vertexes;
     SubBuffer indexes;
+    Texture texture = 0;
 };
 
 // TODO: Implement better command buffer management
@@ -142,14 +146,14 @@ class Renderer {
     // Object buffer is a one-size-fits-all for vertex and index data
     std::unique_ptr<RenderBuffer> staging_buffer_;
     std::unique_ptr<RenderBuffer> object_buffer_;
-    std::vector<MeshSubBuffer> mesh_subbuffers_;
+    std::vector<MeshData> mesh_data_;
     size_t buffer_size_;
 
     // Uniform buffers
     std::unique_ptr<RenderBuffer> uniform_buffer_;
 
     // Texture handling
-    std::unique_ptr<Texture> texture_;
+    std::vector<std::unique_ptr<TextureData>> textures_;
     vk::UniqueSampler texture_sampler_;
 
     // Semaphores
@@ -313,6 +317,11 @@ class Renderer {
 
         vk::PhysicalDeviceFeatures enabled_features;
         enabled_features.samplerAnisotropy = true;
+        
+        vk::PhysicalDeviceDescriptorIndexingFeatures features;
+        features.descriptorBindingPartiallyBound = true;
+        features.runtimeDescriptorArray = true;
+        features.descriptorBindingVariableDescriptorCount = true;
 
         auto &device_extensions = physical_->get_extensions();
         vk::DeviceCreateInfo create_info(
@@ -324,6 +333,7 @@ class Renderer {
             &device_extensions[0],
             &enabled_features
         );
+        create_info.pNext = &features;
         logical_ = physical_handle.createDeviceUnique(create_info);
         
         // Grab device queue handles
@@ -488,19 +498,35 @@ class Renderer {
             vk::ShaderStageFlagBits::eVertex
         );
 
-        // Image sampler binding
+        // Image sampler binding (supports variable count textures)
+        uint32_t max_samplers = physical_->get_limits().maxDescriptorSetSamplers;
         vk::DescriptorSetLayoutBinding sampler_layout_binding(
-            1, vk::DescriptorType::eCombinedImageSampler, 1,
+            1, vk::DescriptorType::eCombinedImageSampler, max_samplers,
             vk::ShaderStageFlagBits::eFragment
         );
 
+        
+        // Create descriptor set layout bindings
         std::vector<vk::DescriptorSetLayoutBinding> bindings = {
             ubo_layout_binding, sampler_layout_binding
         };
+
+        // Set binding flags
+        vk::DescriptorBindingFlags flags[2] = {
+            vk::DescriptorBindingFlagBitsEXT::ePartiallyBound,
+            vk::DescriptorBindingFlagBitsEXT::eVariableDescriptorCount
+        };
+        vk::DescriptorSetLayoutBindingFlagsCreateInfo binding_flags(
+            bindings.size(), flags
+        );
+
         vk::DescriptorSetLayoutCreateInfo create_info(
             vk::DescriptorSetLayoutCreateFlags(),
             bindings.size(), &bindings[0]
         );
+        create_info.pNext = &binding_flags;
+        
+        
         descriptor_layout_ = logical_->createDescriptorSetLayoutUnique(
             create_info
         );
@@ -609,8 +635,8 @@ class Renderer {
         // Create the fixed function stages
         // Vertex input stage
         // These describe the data that will be placed in the buffers
-        auto binding_description = RVertex::get_binding_description();
-        auto attribute_descriptions = RVertex::get_attribute_descriptions();
+        auto binding_description = Vertex::get_binding_description();
+        auto attribute_descriptions = Vertex::get_attribute_descriptions();
         vk::PipelineVertexInputStateCreateInfo vertex_input_info(
             vk::PipelineVertexInputStateCreateFlags(),
             1, 
@@ -714,10 +740,17 @@ class Renderer {
             0, nullptr
         };
 
-        // Define pipeline layout
+        // Define push constants
+        vk::PushConstantRange push_constant_range(
+            vk::ShaderStageFlagBits::eVertex,
+            0, sizeof(PushConstantObject)
+        );
+
+        // Define the pipeline layout
         vk::PipelineLayoutCreateInfo layout_info(
             vk::PipelineLayoutCreateFlags(),
-            1, &descriptor_layout_.get(), 0, nullptr
+            1, &descriptor_layout_.get(), 
+            1, &push_constant_range
         );
         layout_ = logical_->createPipelineLayoutUnique(layout_info);
 
@@ -806,12 +839,16 @@ class Renderer {
 
         // Create the staging buffer for CPU to GPU copies
         staging_buffer_ = std::make_unique<RenderBuffer>(
-            buffer_size_, logical_.get(), *physical_, 
+            buffer_size_, 
+            logical_.get(), 
+            *physical_, 
             vk::BufferUsageFlagBits::eTransferSrc,
             vk::MemoryPropertyFlagBits::eHostVisible | 
             vk::MemoryPropertyFlagBits::eHostCoherent |
             vk::MemoryPropertyFlagBits::eHostCached,
-            transfer_commands_.get(), transfer_pool_.get(), transfer_queue_
+            transfer_commands_.get(),
+            transfer_pool_.get(), 
+            transfer_queue_
         );
         staging_buffer_->suballoc(buffer_size_);
     }
@@ -853,9 +890,14 @@ class Renderer {
         auto usage = vk::BufferUsageFlagBits::eIndexBuffer |
                      vk::BufferUsageFlagBits::eVertexBuffer;
         object_buffer_ = std::make_unique<RenderBuffer>(
-            buffer_size_, logical_.get(), *physical_,
-            usage, vk::MemoryPropertyFlagBits::eDeviceLocal,
-            transfer_commands_.get(), transfer_pool_.get(), transfer_queue_
+            buffer_size_, 
+            logical_.get(), 
+            *physical_,
+            usage, 
+            vk::MemoryPropertyFlagBits::eDeviceLocal,
+            transfer_commands_.get(), 
+            transfer_pool_.get(), 
+            transfer_queue_
         );
     }
 
@@ -864,12 +906,16 @@ class Renderer {
     // E.g., camera matrix, mouse pointer location, screen size, etc.
     void create_uniform_buffer() {
         uniform_buffer_ = std::make_unique<RenderBuffer>(
-            buffer_size_, logical_.get(), *physical_, 
+            buffer_size_, 
+            logical_.get(), 
+            *physical_, 
             vk::BufferUsageFlagBits::eUniformBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible |
             vk::MemoryPropertyFlagBits::eHostCoherent |
             vk::MemoryPropertyFlagBits::eHostCached,
-            transfer_commands_.get(), transfer_pool_.get(), transfer_queue_
+            transfer_commands_.get(), 
+            transfer_pool_.get(), 
+            transfer_queue_
         );
 
         // Ensure buffer offsets fit alignment requirements
@@ -908,8 +954,11 @@ class Renderer {
 
     // Create the descriptor sets and map them to the UBOs
     // Descriptor sets can be accessed by a particular shader stage
-    void create_descriptor_sets() {
-        // Allocate the descriptor sets within the pool
+    void allocate_descriptor_sets() {
+        // Reset the pool
+        descriptor_sets_.clear();
+
+        // Allocate new descriptor sets within the pool
         std::vector<vk::DescriptorSetLayout> layouts(
             images_.size(), descriptor_layout_.get()
         );
@@ -918,10 +967,22 @@ class Renderer {
             layouts.size(),
             &layouts[0]
         );
+
+        std::vector<uint32_t> descriptor_counts(
+            images_.size(), textures_.size()
+        );
+        vk::DescriptorSetVariableDescriptorCountAllocateInfo variable_desc(
+            images_.size(),
+            &descriptor_counts[0]
+        );
+        alloc_info.pNext = &variable_desc;
+
         descriptor_sets_ = logical_->allocateDescriptorSetsUnique(
             alloc_info
         );
+    }
 
+    void write_descriptor_sets() {
         // Map each UBO in uniform_buffer_ to a descriptor set
         for(int i = 0; i < uniform_buffer_->get_subbuffer_count(); i++) {
             // Uniform buffer descriptor set
@@ -930,28 +991,33 @@ class Renderer {
                 uniform_buffer_->get_offset(i), 
                 sizeof(UniformBufferObject)
             );
+
             // Image sampler descriptor set
-            vk::DescriptorImageInfo image_info(
-                texture_sampler_.get(),
-                texture_->get_view(),
-                vk::ImageLayout::eShaderReadOnlyOptimal
-            );
+            std::vector<vk::DescriptorImageInfo> image_infos;
+            for(auto &texture : textures_) {
+                vk::DescriptorImageInfo image_info(
+                    texture_sampler_.get(),
+                    texture->get_view(),
+                    vk::ImageLayout::eShaderReadOnlyOptimal
+                );
+                image_infos.push_back(image_info);
+            }
 
 
             std::vector<vk::WriteDescriptorSet> descriptor_writes;
             descriptor_writes.push_back({
                 descriptor_sets_[i].get(),
-                0, // Binding value in shader layout 
-                0, 1,
+                0, 0, 1,
                 vk::DescriptorType::eUniformBuffer,
-                &image_info, &buffer_info, nullptr
+                nullptr, &buffer_info, nullptr
             });
+
+            // Bind all textures
             descriptor_writes.push_back({
                 descriptor_sets_[i].get(),
-                1,
-                0, 1,
+                1, 0, static_cast<uint32_t>(textures_.size()),
                 vk::DescriptorType::eCombinedImageSampler,
-                &image_info, nullptr, nullptr
+                &image_infos[0], nullptr, nullptr
             });
             logical_->updateDescriptorSets(descriptor_writes, nullptr);
         }
@@ -996,32 +1062,41 @@ class Renderer {
             // TODO: Use secondary buffers for multithreaded rendering
             //       Secondary buffers are hidden from CPU but can be
             //       called by primary command buffers
-            for(auto &mesh_subbuffer : mesh_subbuffers_) {
+            for(auto &mesh : mesh_data_) {
                 // Bind the vertex and index sub-buffers to the command queue
                 std::vector<vk::DeviceSize> offsets = {
-                    object_buffer_->get_offset(mesh_subbuffer.vertexes)
+                    object_buffer_->get_offset(mesh.vertexes)
                 };
                 graphics_commands_[i]->bindVertexBuffers(
                     0, object_buffer_->get_handle(), offsets
                 );
                 graphics_commands_[i]->bindIndexBuffer(
                     object_buffer_->get_handle(), 
-                    object_buffer_->get_offset(mesh_subbuffer.indexes), 
+                    object_buffer_->get_offset(mesh.indexes), 
                     vk::IndexType::eUint16
                 );
 
                 // Bind desccriptor sets
-                std::vector<vk::DescriptorSet> bound_descriptors = {
-                    descriptor_sets_[i].get()
-                };
                 graphics_commands_[i]->bindDescriptorSets(
                     vk::PipelineBindPoint::eGraphics, layout_.get(),
-                    0, bound_descriptors, nullptr
+                    0, descriptor_sets_[i].get(), nullptr
                 );
 
-                // Record the actual draw command!!!!
+                // Send push constant data to shader stages
+                PushConstantObject push_constant = {
+                    mesh.texture
+                };
+                graphics_commands_[i]->pushConstants(
+                    layout_.get(), 
+                    vk::ShaderStageFlagBits::eVertex,
+                    0, 
+                    sizeof(push_constant), 
+                    &push_constant
+                );
+                    
+                // Draw the mesh
                 graphics_commands_[i]->drawIndexed(
-                    object_buffer_->get_subfill(mesh_subbuffer.indexes) / sizeof(uint16_t),
+                    object_buffer_->get_subfill(mesh.indexes) / sizeof(uint16_t),
                     1, 0, 0, 0
                 );
             }
@@ -1123,6 +1198,14 @@ class Renderer {
         }
     }
 
+    // Reset all descriptor sets
+    void reset_descriptor_sets() {
+        logical_->waitIdle();
+        allocate_descriptor_sets();
+        write_descriptor_sets();
+        record_commands();
+    }
+
 public:
     Renderer(SDL_Window *window) {
         window_ = window;
@@ -1150,15 +1233,18 @@ public:
             create_framebuffers();
             create_command_pool();
             create_command_buffers();
-            
-            load_texture("../assets/texture.jpg");
-            create_texture_sampler();
 
             create_object_buffer();
             create_uniform_buffer();
 
             create_descriptor_pool();
-            create_descriptor_sets();
+            create_texture_sampler();
+
+            // Load a default white texture
+            unsigned char white[] = {255, 255, 255, 255};
+            load_texture(white, 1, 1);
+            allocate_descriptor_sets();
+            write_descriptor_sets();
             
             record_commands();
 
@@ -1276,14 +1362,14 @@ public:
     // * Clear the index and staging buffers
 
     // Alternative? Record secondary buffer ONLY when something new is added
-    void add_triangle() {
-        std::vector<RVertex> vertices;
+    void add_mesh(Texture texture) {
+        std::vector<Vertex> vertices;
         std::vector<uint16_t> indices;
         vertices = {
-            {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-            {{0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-            {{0.5f, 0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}},
-            {{-0.5f, 0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 1.0f}},
+            {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
+            {{0.5f, -0.5f}, {0.0f, 0.0f, 1.0f, 1.0f}, {0.0f, 0.0f}},
+            {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+            {{-0.5f, 0.5f}, {1.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
         };
         indices = {
             0, 1, 2, 2, 3, 0
@@ -1316,53 +1402,82 @@ public:
 
         // TODO: Add custom texture
         // Give each mesh its own descriptor set
-        mesh_subbuffers_.push_back({
+        mesh_data_.push_back({
             vertexes,
-            indexes
+            indexes,
+            texture
         });
         record_commands();
     }
 
     // Testing dynamic subbuffer removal
-    void remove_triangle() {
-        if(mesh_subbuffers_.empty()) {
+    void remove_mesh() {
+        if(mesh_data_.empty()) {
             return;
         }
-        MeshSubBuffer mesh_subbuffer = mesh_subbuffers_.back();
-        object_buffer_->delete_subbuffer(mesh_subbuffer.indexes);
-        object_buffer_->delete_subbuffer(mesh_subbuffer.vertexes);
-        mesh_subbuffers_.pop_back();
+        MeshData mesh = mesh_data_.back();
+        object_buffer_->delete_subbuffer(mesh.indexes);
+        object_buffer_->delete_subbuffer(mesh.vertexes);
+        mesh_data_.pop_back();
         record_commands();
     }
 
     // Load a texture
-    void load_texture(std::string filename) {
+    Texture load_texture(std::string filename) {
         int width, height, channels;
         stbi_uc *pixels = stbi_load(
             filename.c_str(), 
             &width, &height, &channels, 
             STBI_rgb_alpha
         );
-
+        
         vk::DeviceSize image_size = width * height * 4;
         if(!pixels) {
             throw std::runtime_error("Could not load image.");
         }
         staging_buffer_->clear(0);
         staging_buffer_->copy(0, pixels, image_size);
-
-
-        texture_ = std::make_unique<Texture>(
-            logical_.get(), 
-            *physical_.get(),
-            graphics_pool_.get(),
-            graphics_queue_,
-            *staging_buffer_.get(),
-            width, height
+        textures_.push_back(
+            std::move(
+                std::make_unique<TextureData>(
+                    logical_.get(), 
+                    *physical_.get(),
+                    graphics_pool_.get(),
+                    graphics_queue_,
+                    *staging_buffer_.get(),
+                    width, height
+                )
+            )
         );
         staging_buffer_->clear(0);
         stbi_image_free(pixels);
+        reset_descriptor_sets();
+        return textures_.size() - 1;
     }
+
+    Texture load_texture(unsigned char pixels[], int width, int height) {
+        vk::DeviceSize image_size = width * height * 4;
+        if(!pixels) {
+            throw std::runtime_error("Could not load image.");
+        }
+        staging_buffer_->clear(0);
+        staging_buffer_->copy(0, pixels, image_size);
+        textures_.push_back(
+            std::move(
+                std::make_unique<TextureData>(
+                    logical_.get(), 
+                    *physical_.get(),
+                    graphics_pool_.get(),
+                    graphics_queue_,
+                    *staging_buffer_.get(),
+                    width, height
+                )
+            )
+        );
+        staging_buffer_->clear(0);
+        reset_descriptor_sets();
+        return textures_.size() - 1;
+    } 
 };
 
 #endif
