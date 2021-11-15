@@ -25,9 +25,6 @@ RenderBuffer::RenderBuffer(size_t length,
         properties_ & vk::MemoryPropertyFlagBits::eHostVisible
     );
 
-    // Subbuffer offsets must be a multiple of 4
-    offset_alignment_ = 4;
-
     initialize_buffer();
     alloc_memory();
 
@@ -75,6 +72,9 @@ void RenderBuffer::alloc_memory() {
         requirements.size,
         memory_type
     );
+
+    // Suballocation offsets will be a multiple of this alignment
+    offset_alignment_ = requirements.alignment;
     memory_ = logical_.allocateMemoryUnique(
         alloc_info
     );
