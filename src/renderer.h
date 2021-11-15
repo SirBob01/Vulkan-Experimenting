@@ -3,6 +3,7 @@
 #define VULKAN_HPP_TYPESAFE_CONVERSION
 #define STB_IMAGE_IMPLEMENTATION
 #define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 
 #include <vulkan/vulkan.hpp>
 #include <SDL2/SDL_vulkan.h>
@@ -35,7 +36,7 @@ using ShaderBytes = std::vector<char>; // Vulkan shader bytecode for parsing
 
 struct Vertex {
     // Interleaved vertex attributes
-    glm::vec2 pos;
+    glm::vec3 pos;
     glm::vec4 color;
     glm::vec2 tex_coord;
 
@@ -51,7 +52,7 @@ struct Vertex {
         std::array<vk::VertexInputAttributeDescription, 3> desc;
         desc[0] = {
             0, 0, 
-            vk::Format::eR32G32Sfloat, 
+            vk::Format::eR32G32B32Sfloat, 
             offsetof(Vertex, pos)   // Memory offset of position member
         };
         desc[1] = {
@@ -1366,13 +1367,19 @@ public:
         std::vector<Vertex> vertices;
         std::vector<uint16_t> indices;
         vertices = {
-            {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
-            {{0.5f, -0.5f}, {0.0f, 0.0f, 1.0f, 1.0f}, {0.0f, 0.0f}},
-            {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-            {{-0.5f, 0.5f}, {1.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
+            {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
+            {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
+            {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+            {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
+
+            {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
+            {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
+            {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+            {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}
         };
         indices = {
-            0, 1, 2, 2, 3, 0
+            0, 1, 2, 2, 3, 0,
+            4, 5, 6, 6, 7, 4
         };
 
         int index_len_bytes = sizeof(indices[0]) * indices.size();
