@@ -1430,29 +1430,9 @@ public:
             &width, &height, &channels, 
             STBI_rgb_alpha
         );
-        
-        vk::DeviceSize image_size = width * height * 4;
-        if(!pixels) {
-            throw std::runtime_error("Could not load image.");
-        }
-        staging_buffer_->clear(0);
-        staging_buffer_->copy(0, pixels, image_size);
-        textures_.push_back(
-            std::move(
-                std::make_unique<TextureData>(
-                    logical_.get(), 
-                    *physical_.get(),
-                    graphics_pool_.get(),
-                    graphics_queue_,
-                    *staging_buffer_.get(),
-                    width, height
-                )
-            )
-        );
-        staging_buffer_->clear(0);
+        Texture texture = load_texture(pixels, width, height);
         stbi_image_free(pixels);
-        reset_descriptor_sets();
-        return textures_.size() - 1;
+        return texture;
     }
 
     Texture load_texture(unsigned char pixels[], int width, int height) {
