@@ -12,5 +12,9 @@ layout(location = 0) out vec4 outColor;
 
 void main() {
     vec4 texture = texture(textureSamplers[textureIndex], fragTexCoord);
-    outColor = fragColor.rgba * texture.rgba;
+    vec4 color = fragColor.rgba * texture.rgba;
+
+    // Discard the fragment if it is translucent
+    if(color.a < 0.9) discard;
+    else outColor = color;
 }

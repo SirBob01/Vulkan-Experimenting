@@ -111,6 +111,11 @@ class Renderer {
     vk::UniqueSwapchainKHR swapchain_;
     std::vector<vk::Image> images_;
     std::vector<vk::UniqueImageView> views_;
+    
+    // Depth buffer
+    vk::UniqueImage depth_image_;
+    vk::UniqueDeviceMemory depth_image_memory_;
+    vk::UniqueImageView depth_view_;
 
     // Image meta data
     vk::Extent2D image_extent_;
@@ -173,6 +178,7 @@ class Renderer {
 
     // Clear value for viewport refresh
     vk::ClearValue clear_value_;
+    vk::ClearValue depth_clear_value_;
 
     bool vsync_ = false;
 
@@ -584,23 +590,62 @@ class Renderer {
             vk::ImageLayout::ePresentSrcKHR // Final layout
         );
 
+        // Depth buffer
+        vk::AttachmentDescription depth_attachment(
+            vk::AttachmentDescriptionFlags(),
+            get_depth_format(),
+            vk::SampleCountFlagBits::e1,
+
+            vk::AttachmentLoadOp::eClear,
+            vk::AttachmentStoreOp::eDontCare,
+
+            vk::AttachmentLoadOp::eDontCare,
+            vk::AttachmentStoreOp::eDontCare,
+
+            vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eDepthStencilAttachmentOptimal
+        );
+
         // 1 Subpass
         vk::AttachmentReference color_ref(
             0, vk::ImageLayout::eColorAttachmentOptimal
         );
-        vk::SubpassDescription subpass(
+        vk::AttachmentReference depth_ref(
+            1, vk::ImageLayout::eDepthStencilAttachmentOptimal
+        );
+        vk::SubpassDescription subpass1(
             vk::SubpassDescriptionFlags(),
             vk::PipelineBindPoint::eGraphics,
             0, nullptr,
             1, &color_ref,
-            0, nullptr
+            nullptr, &depth_ref
+        );
+
+        // Define subpass dependencies
+        vk::SubpassDependency dependency(
+            VK_SUBPASS_EXTERNAL,
+            0,
+            vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests,
+            vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests,
+            vk::AccessFlagBits::eNoneKHR,
+            vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite
         );
 
         // Create the render pass
+        std::vector<vk::SubpassDescription> subpasses = {
+            subpass1
+        };
+        std::vector<vk::AttachmentDescription> attachments = {
+            color_attachment, depth_attachment
+        };
+        std::vector<vk::SubpassDependency> dependencies = {
+            dependency
+        };
         vk::RenderPassCreateInfo render_pass_info(
             vk::RenderPassCreateFlags(),
-            1, &color_attachment,
-            1, &subpass
+            attachments.size(), &attachments[0],
+            subpasses.size(), &subpasses[0],
+            dependencies.size(), &dependencies[0]
         );
         render_pass_ = logical_->createRenderPassUnique(render_pass_info);
     }
@@ -755,6 +800,13 @@ class Renderer {
         );
         layout_ = logical_->createPipelineLayoutUnique(layout_info);
 
+        vk::PipelineDepthStencilStateCreateInfo depth_stencil(
+            vk::PipelineDepthStencilStateCreateFlags(),
+            true, true,
+            vk::CompareOp::eLess,
+            false, false
+        );
+
         // Create the pipeline, assemble all the stages
         vk::GraphicsPipelineCreateInfo pipeline_info(
             vk::PipelineCreateFlags(),
@@ -765,7 +817,7 @@ class Renderer {
             &viewport_info,
             &rasterizer_info,
             &multisampler_info,
-            nullptr,            // Depth stencil stage (unused)
+            &depth_stencil,     // Depth stencil stage (unused)
             &blend_info,
             &dynamic_info,
             layout_.get(),
@@ -783,10 +835,13 @@ class Renderer {
     // Ex. color image buffer and depth buffer
     void create_framebuffers() {
         for(auto &view : views_) {
+            std::vector<vk::ImageView> views = {
+                view.get(), depth_view_.get()
+            };
             vk::FramebufferCreateInfo framebuffer_info(
                 vk::FramebufferCreateFlags(),
                 render_pass_.get(),
-                1, &view.get(),
+                views.size(), &views[0],
                 image_extent_.width,
                 image_extent_.height,
                 1
@@ -884,6 +939,91 @@ class Renderer {
             false
         );
         texture_sampler_ = logical_->createSamplerUnique(sampler_info);
+    }
+
+    vk::Format get_depth_format() {
+        std::vector<vk::Format> query = {
+            vk::Format::eD32Sfloat,
+            vk::Format::eD32SfloatS8Uint,
+            vk::Format::eD24UnormS8Uint
+        };
+        vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
+        vk::FormatFeatureFlags feature_flags = vk::FormatFeatureFlagBits::eDepthStencilAttachment;
+
+        // Get an available format of the image
+        vk::Format depth_image_format;
+        for(vk::Format format : query) {
+            vk::FormatProperties props = physical_->get_handle().getFormatProperties(format);
+            if(tiling == vk::ImageTiling::eLinear && 
+               (props.linearTilingFeatures & feature_flags) == feature_flags) {
+                return format;
+            }
+            else if(tiling == vk::ImageTiling::eOptimal && 
+                    (props.optimalTilingFeatures & feature_flags) == feature_flags) {
+                return format;
+            }
+        }
+
+        throw std::runtime_error("Could not find a suitable format for the depth buffer.");
+    }
+
+    // Create the depth image
+    void create_depth_image() {
+        // Create the image
+        auto supported = physical_->get_swapchain_support();
+        auto extent = get_swapchain_extent(supported.capabilities);
+        vk::Format depth_format = get_depth_format();
+        vk::ImageCreateInfo image_info(
+            vk::ImageCreateFlags(),
+            vk::ImageType::e2D,
+            depth_format,
+            { extent.width, extent.height, 1 },
+            1,
+            1,
+            vk::SampleCountFlagBits::e1,
+            vk::ImageTiling::eOptimal,
+            vk::ImageUsageFlagBits::eDepthStencilAttachment,
+            vk::SharingMode::eExclusive
+        );
+        depth_image_ = logical_->createImageUnique(image_info);
+
+        auto requirements = logical_->getImageMemoryRequirements(depth_image_.get());
+        auto device_spec = physical_->get_memory();
+        int memory_type = -1;
+        for(uint32_t i = 0; i < device_spec.memoryTypeCount; i++) {
+            if((requirements.memoryTypeBits & (1 << i)) && 
+            (device_spec.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+                memory_type = i;
+                break;
+            }
+        }
+        if(memory_type < 0) {
+            throw std::runtime_error("Vulkan failed to allocate memory for a depth buffer.");
+        }
+        vk::MemoryAllocateInfo alloc_info(
+            requirements.size,
+            memory_type
+        );
+        depth_image_memory_ = logical_->allocateMemoryUnique(
+            alloc_info
+        );
+        logical_->bindImageMemory(depth_image_.get(), depth_image_memory_.get(), 0);
+    }
+
+    // Create the depth image view
+    void create_depth_view() {
+        vk::Format depth_format = get_depth_format();
+        vk::ImageViewCreateInfo view_info(
+            vk::ImageViewCreateFlags(),
+            depth_image_.get(),
+            vk::ImageViewType::e2D,
+            depth_format
+        );
+        view_info.subresourceRange = {
+            vk::ImageAspectFlagBits::eDepth,
+            0, 1, 0, 1
+        };
+        depth_view_ = logical_->createImageViewUnique(view_info);
     }
 
     // Create the object buffer
@@ -1040,11 +1180,14 @@ class Renderer {
         for(int i = 0; i < graphics_commands_.size(); i++) {
             graphics_commands_[i]->begin(begin_info);
 
+            std::array<vk::ClearValue, 2> clear_values = {
+                clear_value_, depth_clear_value_
+            };
             vk::RenderPassBeginInfo render_begin_info(
                 render_pass_.get(),
                 framebuffers_[i].get(),
                 vk::Rect2D({0, 0}, image_extent_),
-                1, &clear_value_
+                clear_values.size(), &clear_values[0]
             );
             graphics_commands_[i]->beginRenderPass(
                 render_begin_info, 
@@ -1215,6 +1358,7 @@ public:
         current_frame_ = 0;
 
         clear_value_.color.setFloat32({0, 0, 0, 1});
+        depth_clear_value_.setDepthStencil({1, 0});
 
         // Perform all initialization steps
         try {
@@ -1226,7 +1370,10 @@ public:
             create_logical_device();
             create_swapchain();
             create_views();
-            
+
+            create_depth_image();
+            create_depth_view();
+
             create_descriptor_layout();
             create_render_pass();
             create_graphics_pipeline();
