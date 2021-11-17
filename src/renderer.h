@@ -506,7 +506,7 @@ class Renderer {
         );
 
         // Image sampler binding (supports variable count textures)
-        uint32_t max_samplers = physical_->get_limits().maxDescriptorSetSamplers;
+        uint32_t max_samplers = physical_->get_limits().maxPerStageDescriptorSamplers;
         vk::DescriptorSetLayoutBinding sampler_layout_binding(
             1, vk::DescriptorType::eCombinedImageSampler, max_samplers,
             vk::ShaderStageFlagBits::eFragment
@@ -1075,9 +1075,11 @@ class Renderer {
             vk::DescriptorType::eUniformBuffer,
             images_.size()
         );
+
+        uint32_t max_samplers = physical_->get_limits().maxPerStageDescriptorSamplers;
         vk::DescriptorPoolSize sampler_size(
             vk::DescriptorType::eCombinedImageSampler,
-            images_.size()
+            images_.size() * max_samplers
         );
 
         std::vector<vk::DescriptorPoolSize> pool_sizes = {
@@ -1217,7 +1219,7 @@ class Renderer {
                 graphics_commands_[i]->bindIndexBuffer(
                     object_buffer_->get_handle(), 
                     object_buffer_->get_offset(mesh.indexes), 
-                    vk::IndexType::eUint16
+                    vk::IndexType::eUint32
                 );
 
                 // Bind desccriptor sets
@@ -1240,7 +1242,7 @@ class Renderer {
                     
                 // Draw the mesh
                 graphics_commands_[i]->drawIndexed(
-                    object_buffer_->get_subfill(mesh.indexes) / sizeof(uint16_t),
+                    object_buffer_->get_subfill(mesh.indexes) / sizeof(uint32_t),
                     1, 0, 0, 0
                 );
             }
@@ -1289,7 +1291,7 @@ class Renderer {
         ).count();
 
         UniformBufferObject ubo{};
-        ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), 
+        ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(60.0f), 
                                 glm::vec3(0.0f, 0.0f, 1.0f));
         ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), 
                                glm::vec3(0.0f, 0.0f, 1.0f));
@@ -1479,6 +1481,11 @@ public:
         // If this fails, we probably need to reset the swapchain
         try {
             result = present_queue_.presentKHR(present_info);
+
+            // Sometimes, it does not throw an error
+            if(result != vk::Result::eSuccess) {
+                reset_swapchain();
+            }
         } 
         catch(vk::OutOfDateKHRError e) {
             reset_swapchain();
@@ -1515,7 +1522,7 @@ public:
     // Alternative? Record secondary buffer ONLY when something new is added
     void add_mesh(Texture texture) {
         std::vector<Vertex> vertices;
-        std::vector<uint16_t> indices;
+        std::vector<uint32_t> indices;
         vertices = {
             {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
             {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
