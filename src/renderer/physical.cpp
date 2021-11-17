@@ -75,7 +75,7 @@ void PhysicalDevice::get_command_queues() {
     }
 }
 
-vk::PhysicalDevice PhysicalDevice::get_handle() {
+vk::PhysicalDevice &PhysicalDevice::get_handle() {
     return handle_;
 }  
 
@@ -100,11 +100,11 @@ const std::vector<const char *> &PhysicalDevice::get_extensions() {
     return extensions_;
 }
 
-vk::PhysicalDeviceMemoryProperties PhysicalDevice::get_memory() {
+vk::PhysicalDeviceMemoryProperties &PhysicalDevice::get_memory() {
     return memory_;
 }
 
-vk::PhysicalDeviceLimits PhysicalDevice::get_limits() {
+vk::PhysicalDeviceLimits &PhysicalDevice::get_limits() {
     return properties_.limits;
 }
 

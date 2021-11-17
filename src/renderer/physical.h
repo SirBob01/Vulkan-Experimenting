@@ -53,7 +53,7 @@ public:
     PhysicalDevice(vk::PhysicalDevice handle, vk::SurfaceKHR surface);
     
     // Grab the handle to the Vulkan physical device
-    vk::PhysicalDevice get_handle();
+    vk::PhysicalDevice &get_handle();
 
     // Get the name of the device
     std::string get_name();
@@ -68,10 +68,10 @@ public:
     const std::vector<const char *> &get_extensions();
 
     // Get the memory properties of the device
-    vk::PhysicalDeviceMemoryProperties get_memory();
+    vk::PhysicalDeviceMemoryProperties &get_memory();
 
     // Get the limit constants of the device
-    vk::PhysicalDeviceLimits get_limits();
+    vk::PhysicalDeviceLimits &get_limits();
 
     // Calculate the metric for GPU power
     int get_score();
