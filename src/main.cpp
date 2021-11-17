@@ -27,8 +27,30 @@ int main(int argc, char **argv) {
 
     // Instantiate Renderer class
     Renderer renderer(window);
+
+    // Load textures
     Texture t1 = renderer.load_texture("../assets/texture.jpg");
     Texture t2 = renderer.load_texture("../assets/hazard.png");
+    Texture viking_room_texture = renderer.load_texture("../assets/viking_room.png");
+
+    // Load models
+    Model squares;
+    squares.vertices = {
+        {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
+        {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
+        {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+        {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
+
+        {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
+        {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
+        {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+        {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}
+    };
+    squares.indices = {
+        0, 1, 2, 2, 3, 0,
+        4, 5, 6, 6, 7, 4
+    };
+    Model viking_room("../assets/viking_room.obj");
 
     SDL_Event e;
     bool running = true;
@@ -62,13 +84,16 @@ int main(int argc, char **argv) {
                     }
                 }
                 else if(e.key.keysym.sym == SDLK_t) {
-                    renderer.add_mesh(0);
+                    renderer.add_mesh(squares, 0);
                 }
                 else if(e.key.keysym.sym == SDLK_y) {
-                    renderer.add_mesh(t1);
+                    renderer.add_mesh(squares, t1);
                 }
                 else if(e.key.keysym.sym == SDLK_u) {
-                    renderer.add_mesh(t2);
+                    renderer.add_mesh(squares, t2);
+                }
+                else if(e.key.keysym.sym == SDLK_i) {
+                    renderer.add_mesh(viking_room, viking_room_texture);
                 }
                 else if(e.key.keysym.sym == SDLK_r) {
                     renderer.remove_mesh();
