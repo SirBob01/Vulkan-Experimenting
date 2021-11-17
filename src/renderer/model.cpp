@@ -23,7 +23,7 @@ Model::Model(const std::string obj_filename) {
     for(const auto &shape : shapes) {
         for(const auto &index : shape.mesh.indices) {
             Vertex vert;
-            vert.pos = {
+            vert.position = {
                 attrib.vertices[3 * index.vertex_index + 0],
                 attrib.vertices[3 * index.vertex_index + 1],
                 attrib.vertices[3 * index.vertex_index + 2]

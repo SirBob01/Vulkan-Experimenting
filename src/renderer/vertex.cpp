@@ -1,10 +1,9 @@
 #include "vertex.h"
 
-
 bool Vertex::operator==(const Vertex &other) const {
-    return pos == other.pos && 
-            color == other.color && 
-            tex_coord == other.tex_coord;
+    return position == other.position && 
+           color == other.color && 
+           tex_coord == other.tex_coord;
 }
 
 vk::VertexInputBindingDescription Vertex::get_binding_desc() {
@@ -20,12 +19,12 @@ std::array<vk::VertexInputAttributeDescription, 3> Vertex::get_attribute_desc() 
     desc[0] = {
         0, 0, 
         vk::Format::eR32G32B32Sfloat, 
-        offsetof(Vertex, pos)   // Memory offset of position member
+        offsetof(Vertex, position)
     };
     desc[1] = {
         1, 0, 
         vk::Format::eR32G32B32A32Sfloat, 
-        offsetof(Vertex, color) // Memory offset of color member
+        offsetof(Vertex, color)
     };
     desc[2] = {
         2, 0,
@@ -36,7 +35,7 @@ std::array<vk::VertexInputAttributeDescription, 3> Vertex::get_attribute_desc() 
 }
 
 std::size_t std::hash<Vertex>::operator()(Vertex const &vertex) const {
-    std::size_t hash1 = std::hash<glm::vec3>()(vertex.pos);
+    std::size_t hash1 = std::hash<glm::vec3>()(vertex.position);
     std::size_t hash2 = std::hash<glm::vec4>()(vertex.color);
     std::size_t hash3 = std::hash<glm::vec2>()(vertex.tex_coord);
     return ((hash1 ^ (hash2 << 1)) >> 1) ^ (hash3 << 1);

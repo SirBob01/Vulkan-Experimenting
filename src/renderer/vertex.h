@@ -7,7 +7,7 @@
 #include <glm/gtx/hash.hpp>
 
 struct Vertex {
-    glm::vec3 pos;
+    glm::vec3 position;
     glm::vec4 color;
     glm::vec2 tex_coord;
 

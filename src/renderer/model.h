@@ -7,7 +7,6 @@
 #include "assets/tiny_obj_loader.h"
 #include "vertex.h"
 
-
 struct Model {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
