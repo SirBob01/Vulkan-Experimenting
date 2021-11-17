@@ -45,10 +45,10 @@ RenderBuffer::~RenderBuffer() {
 }
 
 void RenderBuffer::initialize_buffer() {
-    vk::BufferCreateInfo buffer_info(
-        vk::BufferCreateFlags(),
-        length_, usage_
-    );
+    vk::BufferCreateInfo buffer_info;
+    buffer_info.size = length_;
+    buffer_info.usage = usage_;
+    
     handle_ = logical_.createBufferUnique(buffer_info);
 }
 
@@ -68,16 +68,19 @@ void RenderBuffer::alloc_memory() {
     if(memory_type < 0) {
         throw std::runtime_error("Vulkan failed to create buffer.");
     }
-    vk::MemoryAllocateInfo alloc_info(
-        requirements.size,
-        memory_type
+
+    // Allocate memory
+    vk::MemoryAllocateInfo alloc_info;
+    alloc_info.allocationSize = requirements.size;
+    alloc_info.memoryTypeIndex = memory_type;
+    
+    memory_ = logical_.allocateMemoryUnique(
+        alloc_info
     );
 
     // Suballocation offsets will be a multiple of this alignment
     offset_alignment_ = requirements.alignment;
-    memory_ = logical_.allocateMemoryUnique(
-        alloc_info
-    );
+
     // Bind the device memory to the buffer
     logical_.bindBufferMemory(
         handle_.get(), memory_.get(), 0
@@ -96,10 +99,11 @@ void RenderBuffer::copy_to_offset(RenderBuffer &target, size_t length,
         command_pool_,
         vk::CommandPoolResetFlagBits::eReleaseResources
     );
-    vk::CommandBufferBeginInfo begin_info(
-        vk::CommandBufferUsageFlagBits::eOneTimeSubmit
-    );
+
     // Perform the copy
+    vk::CommandBufferBeginInfo begin_info;
+    begin_info.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+    
     command_buffer_.begin(begin_info);
     vk::BufferCopy copy_region(src_offset, dst_offset, length);
     command_buffer_.copyBuffer(
@@ -109,10 +113,10 @@ void RenderBuffer::copy_to_offset(RenderBuffer &target, size_t length,
     command_buffer_.end();
 
     // Submit the command to the transfer queue
-    vk::SubmitInfo submit_info(
-        0, nullptr, nullptr, 
-        1, &command_buffer_
-    );
+    vk::SubmitInfo submit_info;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &command_buffer_;
+
     transfer_queue_.submit(submit_info, nullptr);
     transfer_queue_.waitIdle();
 }
