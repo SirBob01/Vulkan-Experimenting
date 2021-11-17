@@ -2,7 +2,6 @@
 #define RENDERER_H_
 #define VULKAN_HPP_TYPESAFE_CONVERSION
 #define STB_IMAGE_IMPLEMENTATION
-#define TINYOBJLOADER_IMPLEMENTATION
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 
@@ -14,12 +13,10 @@
 #include <glm/gtx/hash.hpp>
 
 #include "assets/stb_image.h"
-#include "assets/tiny_obj_loader.h"
 
 #include <chrono>
 
 #include <vector>
-#include <unordered_map>
 
 #include <exception>
 #include <iostream>
@@ -29,6 +26,8 @@
 #include "physical.h"
 #include "texture.h"
 #include "buffer.h"
+#include "model.h"
+#include "vertex.h"
 #include "debug.h"
 #include "util.h"
 
@@ -40,58 +39,6 @@
 
 using ShaderBytes = std::vector<char>; // Vulkan shader bytecode for parsing
 
-struct Vertex {
-    // Interleaved vertex attributes
-    glm::vec3 pos;
-    glm::vec4 color;
-    glm::vec2 tex_coord;
-
-    bool operator==(const Vertex &other) const {
-        return pos == other.pos && 
-               color == other.color && 
-               tex_coord == other.tex_coord;
-    }
-
-    static vk::VertexInputBindingDescription get_binding_description() {
-        vk::VertexInputBindingDescription desc(
-            0,              // Index in array of bindings
-            sizeof(Vertex)  // Stride (memory buffer traversal)
-        );
-        return desc;
-    }
-
-    static std::array<vk::VertexInputAttributeDescription, 3> get_attribute_descriptions() {
-        std::array<vk::VertexInputAttributeDescription, 3> desc;
-        desc[0] = {
-            0, 0, 
-            vk::Format::eR32G32B32Sfloat, 
-            offsetof(Vertex, pos)   // Memory offset of position member
-        };
-        desc[1] = {
-            1, 0, 
-            vk::Format::eR32G32B32A32Sfloat, 
-            offsetof(Vertex, color) // Memory offset of color member
-        };
-        desc[2] = {
-            2, 0,
-            vk::Format::eR32G32Sfloat,
-            offsetof(Vertex, tex_coord)
-        };
-        return desc;
-    }
-};
-
-template <>
-struct std::hash<Vertex> {
-    std::size_t operator()(Vertex const &vertex) const {
-        std::size_t hash1 = std::hash<glm::vec3>()(vertex.pos);
-        std::size_t hash2 = std::hash<glm::vec4>()(vertex.color);
-        std::size_t hash3 = std::hash<glm::vec2>()(vertex.tex_coord);
-        return ((hash1 ^ (hash2 << 1)) >> 1) ^ (hash3 << 1);
-    }
-};
-
-
 struct PushConstantObject {
     int texture;
 };
@@ -100,56 +47,6 @@ struct UniformBufferObject {
     alignas(16) glm::mat4 model;
     alignas(16) glm::mat4 view;
     alignas(16) glm::mat4 proj;
-};
-
-struct Model {
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-
-    Model() {};
-    Model(std::string obj_filename) {
-        tinyobj::attrib_t attrib;
-        std::vector<tinyobj::shape_t> shapes;
-        std::vector<tinyobj::material_t> materials;
-        std::string warning, error;
-
-        bool result = tinyobj::LoadObj(
-            &attrib, 
-            &shapes, 
-            &materials, 
-            &warning, 
-            &error,
-            obj_filename.c_str()
-        );
-        if(!result) {
-            throw std::runtime_error("Could not load obj file: " + warning + error);
-        }
-
-        std::unordered_map<Vertex, uint32_t> unique_vertices;
-        for(const auto &shape : shapes) {
-            for(const auto &index : shape.mesh.indices) {
-                Vertex vert;
-                vert.pos = {
-                    attrib.vertices[3 * index.vertex_index + 0],
-                    attrib.vertices[3 * index.vertex_index + 1],
-                    attrib.vertices[3 * index.vertex_index + 2]
-                };
-                vert.color = {
-                    1.0, 1.0, 1.0, 1.0
-                };
-                vert.tex_coord = {
-                    attrib.texcoords[2 * index.texcoord_index + 0],
-                    1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
-                };
-
-                if(unique_vertices.count(vert) == 0) {
-                    unique_vertices[vert] = vertices.size();
-                    vertices.push_back(vert);
-                }
-                indices.push_back(unique_vertices[vert]);
-            }
-        }
-    }
 };
 
 struct MeshData {
@@ -754,8 +651,8 @@ class Renderer {
         // Create the fixed function stages
         // Vertex input stage
         // These describe the data that will be placed in the buffers
-        auto binding_description = Vertex::get_binding_description();
-        auto attribute_descriptions = Vertex::get_attribute_descriptions();
+        auto binding_description = Vertex::get_binding_desc();
+        auto attribute_descriptions = Vertex::get_attribute_desc();
         vk::PipelineVertexInputStateCreateInfo vertex_input_info(
             vk::PipelineVertexInputStateCreateFlags(),
             1, 
