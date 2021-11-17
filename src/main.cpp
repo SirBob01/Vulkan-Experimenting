@@ -1,5 +1,5 @@
 #include <SDL2/SDL.h>
-#include "renderer.h"
+#include "renderer/renderer.h"
 
 // Entry point
 // Simulates Dynamo's update pipeline
