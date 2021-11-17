@@ -42,15 +42,14 @@ RenderDebug::RenderDebug(vk::UniqueInstance &instance) {
     load_proxies(instance);
 
     // Create the debug messenger
-    auto severity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
-                    vk::DebugUtilsMessageSeverityFlagBitsEXT::eError;
-    auto type = vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
-                vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
-                vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance;
-    vk::DebugUtilsMessengerCreateInfoEXT create_info(
-        vk::DebugUtilsMessengerCreateFlagsEXT(),
-        severity, type, &message_callback
-    );
+    vk::DebugUtilsMessengerCreateInfoEXT create_info;
+    create_info.messageSeverity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+                                  vk::DebugUtilsMessageSeverityFlagBitsEXT::eError;
+    create_info.messageType = vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
+                              vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
+                              vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance;
+    create_info.pfnUserCallback = &message_callback;
+
     messenger_ = instance->createDebugUtilsMessengerEXTUnique(
         create_info
     );
