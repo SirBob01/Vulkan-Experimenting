@@ -71,12 +71,12 @@ void TextureData::alloc_memory() {
     }
 
     // Allocate memory
-    vk::MemoryAllocateInfo alloc_info;
-    alloc_info.allocationSize = requirements.size;
-    alloc_info.memoryTypeIndex = memory_type;
+    vk::MemoryAllocateInfo mem_alloc_info;
+    mem_alloc_info.allocationSize = requirements.size;
+    mem_alloc_info.memoryTypeIndex = memory_type;
 
     memory_ = logical_.allocateMemoryUnique(
-        alloc_info
+        mem_alloc_info
     );
     
     // Bind the device memory to the image
