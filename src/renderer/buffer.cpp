@@ -70,12 +70,12 @@ void RenderBuffer::alloc_memory() {
     }
 
     // Allocate memory
-    vk::MemoryAllocateInfo alloc_info;
-    alloc_info.allocationSize = requirements.size;
-    alloc_info.memoryTypeIndex = memory_type;
-    
+    vk::MemoryAllocateInfo mem_alloc_info;
+    mem_alloc_info.allocationSize = requirements.size;
+    mem_alloc_info.memoryTypeIndex = memory_type;
+
     memory_ = logical_.allocateMemoryUnique(
-        alloc_info
+        mem_alloc_info
     );
 
     // Suballocation offsets will be a multiple of this alignment
@@ -101,10 +101,10 @@ void RenderBuffer::copy_to_offset(RenderBuffer &target, size_t length,
     );
 
     // Perform the copy
-    vk::CommandBufferBeginInfo begin_info;
-    begin_info.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+    vk::CommandBufferBeginInfo cmd_begin_info;
+    cmd_begin_info.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
     
-    command_buffer_.begin(begin_info);
+    command_buffer_.begin(cmd_begin_info);
     vk::BufferCopy copy_region(src_offset, dst_offset, length);
     command_buffer_.copyBuffer(
         get_handle(), target.get_handle(), 
