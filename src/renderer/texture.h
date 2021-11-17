@@ -19,7 +19,6 @@ class TextureData {
     vk::UniqueImageView view_;
     vk::UniqueDeviceMemory memory_;
 
-    vk::ImageUsageFlags usage_;
     vk::MemoryPropertyFlags properties_;
 
     uint32_t width_; 
