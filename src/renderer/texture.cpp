@@ -87,33 +87,33 @@ void TextureData::alloc_memory() {
 
 void TextureData::transition_layout(vk::ImageLayout from, vk::ImageLayout to) {
     // Define the memory barrier
-    vk::ImageMemoryBarrier barrier_info;
-    barrier_info.srcAccessMask = vk::AccessFlagBits::eNoneKHR;
-    barrier_info.dstAccessMask = vk::AccessFlagBits::eNoneKHR;
-    barrier_info.oldLayout = from;
-    barrier_info.newLayout = to;
-    barrier_info.srcQueueFamilyIndex = 0;
-    barrier_info.dstQueueFamilyIndex = 0;
-    barrier_info.image = image_.get();
+    vk::ImageMemoryBarrier barrier;
+    barrier.srcAccessMask = vk::AccessFlagBits::eNoneKHR;
+    barrier.dstAccessMask = vk::AccessFlagBits::eNoneKHR;
+    barrier.oldLayout = from;
+    barrier.newLayout = to;
+    barrier.srcQueueFamilyIndex = 0;
+    barrier.dstQueueFamilyIndex = 0;
+    barrier.image = image_.get();
 
-    barrier_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-    barrier_info.subresourceRange.baseMipLevel = 0;
-    barrier_info.subresourceRange.levelCount = 1;
-    barrier_info.subresourceRange.baseArrayLayer = 0;
-    barrier_info.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
     
     vk::PipelineStageFlags src_stage, dst_stage;
     if(from == vk::ImageLayout::eUndefined && 
        to == vk::ImageLayout::eTransferDstOptimal) {
-        barrier_info.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+        barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
 
         src_stage = vk::PipelineStageFlagBits::eTopOfPipe;
         dst_stage = vk::PipelineStageFlagBits::eTransfer;
     }
     else if(from == vk::ImageLayout::eTransferDstOptimal && 
             to == vk::ImageLayout::eShaderReadOnlyOptimal) {
-        barrier_info.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-        barrier_info.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+        barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
 
         src_stage = vk::PipelineStageFlagBits::eTransfer;
         dst_stage = vk::PipelineStageFlagBits::eFragmentShader;
@@ -142,7 +142,7 @@ void TextureData::transition_layout(vk::ImageLayout from, vk::ImageLayout to) {
         dst_stage,
         vk::DependencyFlagBits::eByRegion, // TODO 
         nullptr, nullptr, 
-        barrier_info
+        barrier
     );
     command_buffer->end();
 
@@ -157,15 +157,15 @@ void TextureData::transition_layout(vk::ImageLayout from, vk::ImageLayout to) {
 
 void TextureData::copy_from_buffer(RenderBuffer &buffer) {
     // Define the image copy region
-    vk::BufferImageCopy copy_region_info;
-    copy_region_info.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-    copy_region_info.imageSubresource.mipLevel = 0;
-    copy_region_info.imageSubresource.baseArrayLayer = 0;
-    copy_region_info.imageSubresource.layerCount = 1;
+    vk::BufferImageCopy copy_region;
+    copy_region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+    copy_region.imageSubresource.mipLevel = 0;
+    copy_region.imageSubresource.baseArrayLayer = 0;
+    copy_region.imageSubresource.layerCount = 1;
 
-    copy_region_info.imageExtent.width = width_;
-    copy_region_info.imageExtent.height = height_;
-    copy_region_info.imageExtent.depth = 1;
+    copy_region.imageExtent.width = width_;
+    copy_region.imageExtent.height = height_;
+    copy_region.imageExtent.depth = 1;
 
     // Allocate a new one-time command buffer for copying buffer data
     vk::CommandBufferAllocateInfo cmd_alloc_info;
@@ -187,7 +187,7 @@ void TextureData::copy_from_buffer(RenderBuffer &buffer) {
         image_.get(), 
         vk::ImageLayout::eTransferDstOptimal, 
         1, 
-        &copy_region_info
+        &copy_region
     );
     command_buffer->end();
 
