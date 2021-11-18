@@ -108,6 +108,10 @@ vk::PhysicalDeviceLimits &PhysicalDevice::get_limits() {
     return properties_.limits;
 }
 
+vk::FormatProperties PhysicalDevice::get_format_properties(vk::Format format) {
+    return handle_.getFormatProperties(format);
+}
+
 int PhysicalDevice::get_score() {
     int score = 0;
 

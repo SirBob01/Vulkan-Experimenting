@@ -73,6 +73,9 @@ public:
     // Get the limit constants of the device
     vk::PhysicalDeviceLimits &get_limits();
 
+    // Get the image format properties of the device
+    vk::FormatProperties get_format_properties(vk::Format format);
+
     // Calculate the metric for GPU power
     int get_score();
 };
