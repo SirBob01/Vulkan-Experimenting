@@ -150,6 +150,9 @@ class Renderer {
     vk::ClearValue clear_value_;
     vk::ClearValue depth_clear_value_;
 
+    // Mip levels for all textures
+    uint32_t mip_levels_;
+
     bool vsync_ = false;
 
     // Get all required Vulkan extensions from SDL
@@ -915,7 +918,7 @@ class Renderer {
         sampler_info.compareOp = vk::CompareOp::eAlways;
 
         sampler_info.minLod = 0.0f;
-        sampler_info.maxLod = 0.0f;
+        sampler_info.maxLod = static_cast<float>(mip_levels_);
         
         sampler_info.borderColor = vk::BorderColor::eIntOpaqueBlack;
         sampler_info.unnormalizedCoordinates = false;
@@ -935,7 +938,7 @@ class Renderer {
         // Get an available format of the image
         vk::Format depth_image_format;
         for(vk::Format format : query) {
-            auto props = physical_->get_handle().getFormatProperties(format);
+            auto props = physical_->get_format_properties(format);
             if(tiling == vk::ImageTiling::eLinear && 
                (props.linearTilingFeatures & feature_flags) == feature_flags) {
                 return format;
@@ -1366,6 +1369,8 @@ public:
 
         clear_value_.color.setFloat32({0, 0, 0, 1});
         depth_clear_value_.setDepthStencil({1, 0});
+        
+        mip_levels_ = 5;
 
         // Perform all initialization steps
         try {
@@ -1604,7 +1609,9 @@ public:
                     graphics_pool_.get(),
                     graphics_queue_,
                     *staging_buffer_.get(),
-                    width, height
+                    width, 
+                    height,
+                    std::floor(std::log2(std::max(width, height))) + 1
                 )
             )
         );

@@ -6,12 +6,14 @@ TextureData::TextureData(vk::Device &logical,
                          vk::Queue &queue,
                          RenderBuffer &staging_buffer,
                          uint32_t width, 
-                         uint32_t height) : physical_(physical) {
+                         uint32_t height,
+                         uint32_t mip_levels) : physical_(physical) {
     logical_ = logical;
     properties_ = vk::MemoryPropertyFlagBits::eDeviceLocal;
 
     width_ = width;
     height_ = height;
+    mip_levels_ = mip_levels;
 
     command_pool_ = command_pool;
     queue_ = queue;
@@ -25,11 +27,12 @@ TextureData::TextureData(vk::Device &logical,
     image_info.extent.height = height;
     image_info.extent.depth = 1;
 
-    image_info.mipLevels = 1;
+    image_info.mipLevels = mip_levels_;
     image_info.arrayLayers = 1;
     image_info.samples = vk::SampleCountFlagBits::e1;
     image_info.tiling = vk::ImageTiling::eOptimal;
-    image_info.usage = vk::ImageUsageFlagBits::eTransferDst | 
+    image_info.usage = vk::ImageUsageFlagBits::eTransferSrc |
+                       vk::ImageUsageFlagBits::eTransferDst | 
                        vk::ImageUsageFlagBits::eSampled;
     image_info.sharingMode = vk::SharingMode::eExclusive;
 
@@ -42,10 +45,7 @@ TextureData::TextureData(vk::Device &logical,
         vk::ImageLayout::eTransferDstOptimal
     );
     copy_from_buffer(staging_buffer);
-    transition_layout(
-        vk::ImageLayout::eTransferDstOptimal, 
-        vk::ImageLayout::eShaderReadOnlyOptimal
-    );
+    generate_mipmaps();
     create_view();
 }
 
@@ -98,7 +98,7 @@ void TextureData::transition_layout(vk::ImageLayout from, vk::ImageLayout to) {
 
     barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
     barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.levelCount = mip_levels_;
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount = 1;
     
@@ -208,11 +208,143 @@ void TextureData::create_view() {
 
     view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
     view_info.subresourceRange.baseMipLevel = 0;
-    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.levelCount = mip_levels_;
     view_info.subresourceRange.baseArrayLayer = 0;
     view_info.subresourceRange.layerCount = 1;
 
     view_ = logical_.createImageViewUnique(view_info);
+}
+
+void TextureData::generate_mipmaps() {
+    auto format_properties = physical_.get_format_properties(vk::Format::eR8G8B8A8Srgb);
+    auto tiling_features = format_properties.optimalTilingFeatures;
+    if(!(tiling_features & vk::FormatFeatureFlagBits::eSampledImageFilterLinear)) {
+        // Cannot perform linear filtering to generate mipmaps
+        // Just transition straight to shader readable layout
+        transition_layout(
+            vk::ImageLayout::eTransferDstOptimal, 
+            vk::ImageLayout::eShaderReadOnlyOptimal
+        );
+        return;
+    }
+    
+    vk::ImageMemoryBarrier barrier;
+    barrier.srcQueueFamilyIndex = 0;
+    barrier.dstQueueFamilyIndex = 0;
+    barrier.image = image_.get();
+
+    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+
+    // Allocate a new one-time command buffer for copying buffer data
+    vk::CommandBufferAllocateInfo cmd_alloc_info;
+    cmd_alloc_info.commandPool = command_pool_;
+    cmd_alloc_info.level = vk::CommandBufferLevel::ePrimary;
+    cmd_alloc_info.commandBufferCount = 1;
+    
+    vk::UniqueCommandBuffer command_buffer = std::move(
+        logical_.allocateCommandBuffersUnique(cmd_alloc_info)[0]
+    );
+
+    // Execute commands for blitting the mipped textures
+    vk::CommandBufferBeginInfo cmd_begin_info;
+    cmd_begin_info.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+
+    command_buffer->begin(cmd_begin_info);
+
+    uint32_t mip_width = width_;
+    uint32_t mip_height = height_;
+    for(uint32_t i = 1; i < mip_levels_; i++) {
+        barrier.subresourceRange.baseMipLevel = i - 1;
+        barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+        barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
+        barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+        barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
+
+        command_buffer->pipelineBarrier(
+            vk::PipelineStageFlagBits::eTransfer,
+            vk::PipelineStageFlagBits::eTransfer,
+            vk::DependencyFlagBits::eByRegion, 
+            nullptr, nullptr, 
+            barrier
+        );
+
+        // Blit the new mip
+        vk::ImageBlit blit;
+        blit.srcOffsets[0] = vk::Offset3D(0, 0, 0);
+        blit.srcOffsets[1] = vk::Offset3D(
+            mip_width, 
+            mip_height, 
+            1
+        );
+        blit.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+        blit.srcSubresource.mipLevel = i - 1;
+        blit.srcSubresource.baseArrayLayer = 0;
+        blit.srcSubresource.layerCount = 1;
+
+        blit.dstOffsets[0] = vk::Offset3D(0, 0, 0);
+        blit.dstOffsets[1] = vk::Offset3D(
+            mip_width > 1 ? mip_width / 2 : 1,
+            mip_height > 1 ? mip_height / 2 : 1, 
+            1
+        );
+        blit.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+        blit.dstSubresource.mipLevel = i;
+        blit.dstSubresource.baseArrayLayer = 0;
+        blit.dstSubresource.layerCount = 1;
+
+
+        command_buffer->blitImage(
+            image_.get(), vk::ImageLayout::eTransferSrcOptimal,
+            image_.get(), vk::ImageLayout::eTransferDstOptimal,
+            blit,
+            vk::Filter::eLinear
+        );
+
+        // Transition mip to shader readable format
+        barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+        barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+        command_buffer->pipelineBarrier(
+            vk::PipelineStageFlagBits::eTransfer,
+            vk::PipelineStageFlagBits::eFragmentShader,
+            vk::DependencyFlagBits::eByRegion, 
+            nullptr, nullptr, 
+            barrier
+        );
+
+        if(mip_width > 1) mip_width /= 2;
+        if(mip_height > 1) mip_height /= 2;
+    }
+
+    // Transition last mip to optimal shader readable layout
+    barrier.subresourceRange.baseMipLevel = mip_levels_ - 1;
+    barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+    barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+    barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+    
+    command_buffer->pipelineBarrier(
+        vk::PipelineStageFlagBits::eTransfer,
+        vk::PipelineStageFlagBits::eFragmentShader,
+        vk::DependencyFlagBits::eByRegion, 
+        nullptr, nullptr, 
+        barrier
+    );
+    command_buffer->end();
+
+    // Submit to the queue
+    vk::SubmitInfo submit_info;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &command_buffer.get();
+
+    queue_.submit(submit_info, nullptr);
+    queue_.waitIdle();
 }
 
 vk::Image &TextureData::get_image() {

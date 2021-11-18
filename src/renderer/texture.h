@@ -23,6 +23,7 @@ class TextureData {
 
     uint32_t width_; 
     uint32_t height_;
+    uint32_t mip_levels_;
 
     vk::CommandPool command_pool_;
     vk::Queue queue_;
@@ -39,6 +40,9 @@ class TextureData {
     // Create an image view
     void create_view();
 
+    // Generate the various mipmap levels for the texture
+    void generate_mipmaps();
+
 public:
     TextureData(vk::Device &logical, 
                 PhysicalDevice &physical,
@@ -46,7 +50,8 @@ public:
                 vk::Queue &queue,
                 RenderBuffer &staging_buffer, 
                 uint32_t width, 
-                uint32_t height);
+                uint32_t height,
+                uint32_t mip_levels);
     ~TextureData();
 
     // Get the image this texture refers to
