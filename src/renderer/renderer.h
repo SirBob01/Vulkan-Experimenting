@@ -642,8 +642,8 @@ class Renderer {
     //       different stages of the pipeline
     void create_graphics_pipeline() {
         // Load all required shaders
-        auto vert_shader = create_shader(load_shader("vert.spv"));
-        auto frag_shader = create_shader(load_shader("frag.spv"));
+        auto vert_shader = create_shader(load_shader("base.vert.spv"));
+        auto frag_shader = create_shader(load_shader("base.frag.spv"));
         
         // Create the shader stages
         vk::PipelineShaderStageCreateInfo vert_stage_info;
