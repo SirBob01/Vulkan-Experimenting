@@ -44,9 +44,7 @@ struct PushConstantObject {
 };
 
 struct UniformBufferObject {
-    alignas(16) glm::mat4 model;
-    alignas(16) glm::mat4 view;
-    alignas(16) glm::mat4 proj;
+    alignas(16) glm::mat4 transform;
 };
 
 struct MeshData {
@@ -1408,19 +1406,20 @@ class Renderer {
             current_time - start_time
         ).count();
 
-        UniformBufferObject ubo{};
-        ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(60.0f), 
+        UniformBufferObject ubo;
+        glm::mat4 model = glm::rotate(glm::mat4(1.0f), time * glm::radians(60.0f), 
                                 glm::vec3(0.0f, 0.0f, 1.0f));
-        ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), 
+        glm::mat4 view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), 
                                glm::vec3(0.0f, 0.0f, 1.0f));
         float ratio = 0.0f;
         if(image_extent_.height) {
             ratio = image_extent_.width / static_cast<float>(image_extent_.height);
         }
-        ubo.proj = glm::perspective(
+        glm::mat4 proj = glm::perspective(
             glm::radians(45.0f), ratio, 1.0f, 10.0f
         );
-        ubo.proj[1][1] *= -1;
+        proj[1][1] *= -1;
+        ubo.transform = proj * view * model;
 
         // Overwrite currently written UBO
         uniform_buffer_->clear(image_index);
