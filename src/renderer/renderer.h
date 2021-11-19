@@ -1406,11 +1406,21 @@ class Renderer {
             current_time - start_time
         ).count();
 
-        UniformBufferObject ubo;
-        glm::mat4 model = glm::rotate(glm::mat4(1.0f), time * glm::radians(60.0f), 
-                                glm::vec3(0.0f, 0.0f, 1.0f));
-        glm::mat4 view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), 
-                               glm::vec3(0.0f, 0.0f, 1.0f));
+        // World coordinates (Per object)
+        glm::mat4 model = glm::rotate(
+            glm::mat4(1.0f), 
+            time * glm::radians(60.0f), 
+            glm::vec3(0.0f, 0.0f, 1.0f)
+        );
+
+        // Camera coordinates (Uniform)
+        glm::mat4 view = glm::lookAt(
+            glm::vec3(2.0f, 2.0f, 2.0f), 
+            glm::vec3(0.0f, 0.0f, 0.0f), 
+            glm::vec3(0.0f, 0.0f, 1.0f)
+        );
+
+        // 45 deg FOV (Uniform)
         float ratio = 0.0f;
         if(image_extent_.height) {
             ratio = image_extent_.width / static_cast<float>(image_extent_.height);
@@ -1418,10 +1428,14 @@ class Renderer {
         glm::mat4 proj = glm::perspective(
             glm::radians(45.0f), ratio, 1.0f, 10.0f
         );
-        proj[1][1] *= -1;
-        ubo.transform = proj * view * model;
 
+        // Vertically flip the projection so the model isn't upside down
+        proj[1][1] *= -1;
+        
         // Overwrite currently written UBO
+        UniformBufferObject ubo = {
+            proj * view * model
+        };
         uniform_buffer_->clear(image_index);
         uniform_buffer_->copy(image_index, &ubo, sizeof(ubo));
     }
