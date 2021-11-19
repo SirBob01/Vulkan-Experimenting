@@ -153,6 +153,12 @@ class Renderer {
     // Mip levels for all textures
     uint32_t mip_levels_;
 
+    // Sampling count for MSAA
+    vk::SampleCountFlagBits msaa_samples_;
+    vk::UniqueImage color_image_;
+    vk::UniqueDeviceMemory color_image_memory_;
+    vk::UniqueImageView color_image_view_;
+
     bool vsync_ = false;
 
     // Get all required Vulkan extensions from SDL
@@ -269,6 +275,7 @@ class Renderer {
         }
 
         physical_ = std::make_unique<PhysicalDevice>(best);
+        msaa_samples_ = get_sample_count();
     }
 
     // Create the logical device from the chosen physical device
@@ -303,7 +310,8 @@ class Renderer {
         // Enable certain features of the physical device
         vk::PhysicalDeviceFeatures device_features;
         device_features.samplerAnisotropy = true;
-        
+        device_features.sampleRateShading = true;
+
         vk::PhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_features;
         descriptor_indexing_features.descriptorBindingPartiallyBound = true;
         descriptor_indexing_features.runtimeDescriptorArray = true;
@@ -555,18 +563,18 @@ class Renderer {
         // Color buffer for a single swapchain image
         vk::AttachmentDescription color_attachment;
         color_attachment.format = image_format_;
-        color_attachment.samples = vk::SampleCountFlagBits::e1;
+        color_attachment.samples = msaa_samples_;
 
         // Overwrite old buffer data
         color_attachment.loadOp = vk::AttachmentLoadOp::eClear;
-        color_attachment.storeOp = vk::AttachmentStoreOp::eStore;
+        color_attachment.storeOp = vk::AttachmentStoreOp::eDontCare;
         
         color_attachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
         color_attachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
 
-        // Transition layout to something presentable to the screen
+        // Transition to another color attachment layout for multisampling
         color_attachment.initialLayout = vk::ImageLayout::eUndefined;
-        color_attachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;
+        color_attachment.finalLayout = vk::ImageLayout::eColorAttachmentOptimal;
 
         vk::AttachmentReference color_ref;
         color_ref.attachment = 0;
@@ -575,7 +583,7 @@ class Renderer {
         // Depth buffer
         vk::AttachmentDescription depth_attachment;
         depth_attachment.format = get_depth_format();
-        depth_attachment.samples = vk::SampleCountFlagBits::e1;
+        depth_attachment.samples = msaa_samples_;
 
         // Clear old buffer data
         depth_attachment.loadOp = vk::AttachmentLoadOp::eClear;
@@ -591,12 +599,33 @@ class Renderer {
         depth_ref.attachment = 1;
         depth_ref.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
 
+        // Color resolve buffer for multisampling
+        vk::AttachmentDescription color_resolve_attachment;
+        color_resolve_attachment.format = image_format_;
+        color_resolve_attachment.samples = vk::SampleCountFlagBits::e1;
+
+        // Overwrite old buffer data
+        color_resolve_attachment.loadOp = vk::AttachmentLoadOp::eDontCare;
+        color_resolve_attachment.storeOp = vk::AttachmentStoreOp::eStore;
+        
+        color_resolve_attachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+        color_resolve_attachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+
+        // Transition layout to something presentable to the screen
+        color_resolve_attachment.initialLayout = vk::ImageLayout::eUndefined;
+        color_resolve_attachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;
+
+        vk::AttachmentReference color_resolve_ref;
+        color_resolve_ref.attachment = 2;
+        color_resolve_ref.layout = vk::ImageLayout::eColorAttachmentOptimal;
+
         // Subpasses
         vk::SubpassDescription initial_subpass;
         initial_subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
         initial_subpass.colorAttachmentCount = 1;
         initial_subpass.pColorAttachments = &color_ref;
         initial_subpass.pDepthStencilAttachment = &depth_ref;
+        initial_subpass.pResolveAttachments = &color_resolve_ref;
 
         // Define subpass dependencies
         vk::SubpassDependency subpass_dependency;
@@ -618,7 +647,9 @@ class Renderer {
             initial_subpass
         };
         std::vector<vk::AttachmentDescription> attachments = {
-            color_attachment, depth_attachment
+            color_attachment, 
+            depth_attachment, 
+            color_resolve_attachment
         };
         std::vector<vk::SubpassDependency> dependencies = {
             subpass_dependency
@@ -726,9 +757,10 @@ class Renderer {
         rasterizer_state_info.depthBiasSlopeFactor = 0.0f;
 
         // Multisampling stage (anti-aliasing)
-        // TODO: Revisit this and reduce fuzzy edges
         vk::PipelineMultisampleStateCreateInfo multisampler_info;
-        multisampler_info.rasterizationSamples = vk::SampleCountFlagBits::e1;
+        multisampler_info.rasterizationSamples = msaa_samples_;
+        multisampler_info.sampleShadingEnable = true;
+        multisampler_info.minSampleShading = 0.5f; // Multisampling rate for the textures
 
         // Create the color blender attachment for the blending stage
         // Allows custom blending functions
@@ -829,7 +861,9 @@ class Renderer {
     void create_framebuffers() {
         for(auto &view : views_) {
             std::vector<vk::ImageView> views = {
-                view.get(), depth_view_.get()
+                color_image_view_.get(),
+                depth_view_.get(),
+                view.get()
             };
             vk::FramebufferCreateInfo framebuffer_info;
             framebuffer_info.renderPass = render_pass_.get();
@@ -967,7 +1001,7 @@ class Renderer {
         
         image_info.mipLevels = 1;
         image_info.arrayLayers = 1;
-        image_info.samples = vk::SampleCountFlagBits::e1;
+        image_info.samples = msaa_samples_;
         image_info.tiling = vk::ImageTiling::eOptimal;
         image_info.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
         image_info.sharingMode = vk::SharingMode::eExclusive;
@@ -1015,6 +1049,85 @@ class Renderer {
         view_info.subresourceRange.layerCount = 1;
 
         depth_view_ = logical_->createImageViewUnique(view_info);
+    }
+
+    vk::SampleCountFlagBits get_sample_count() {
+        auto &limits = physical_->get_limits();
+        vk::SampleCountFlags counts = limits.framebufferColorSampleCounts;
+        
+        // Get the maximum available sample count for improved visuals
+        if (counts & vk::SampleCountFlagBits::e64) return vk::SampleCountFlagBits::e64;
+        if (counts & vk::SampleCountFlagBits::e32) return vk::SampleCountFlagBits::e32;
+        if (counts & vk::SampleCountFlagBits::e16) return vk::SampleCountFlagBits::e16;
+        if (counts & vk::SampleCountFlagBits::e8) return vk::SampleCountFlagBits::e8;
+        if (counts & vk::SampleCountFlagBits::e4) return vk::SampleCountFlagBits::e4;
+        if (counts & vk::SampleCountFlagBits::e2) return vk::SampleCountFlagBits::e2;
+        return vk::SampleCountFlagBits::e1;
+    }
+
+    // Create the multisampling color buffer image
+    void create_color_image() {
+        auto supported = physical_->get_swapchain_support();
+        auto extent2D = get_swapchain_extent(supported.capabilities);
+
+        vk::ImageCreateInfo image_info;
+        image_info.imageType = vk::ImageType::e2D;
+        image_info.format = image_format_;
+
+        image_info.extent.width = extent2D.width;
+        image_info.extent.height = extent2D.height;
+        image_info.extent.depth = 1;
+        
+        image_info.mipLevels = 1;
+        image_info.arrayLayers = 1;
+        image_info.samples = msaa_samples_;
+        image_info.tiling = vk::ImageTiling::eOptimal;
+        image_info.usage = vk::ImageUsageFlagBits::eColorAttachment;
+        image_info.sharingMode = vk::SharingMode::eExclusive;
+
+        color_image_ = logical_->createImageUnique(image_info);
+
+        auto requirements = logical_->getImageMemoryRequirements(color_image_.get());
+        auto device_spec = physical_->get_memory();
+        int memory_type = -1;
+        for(uint32_t i = 0; i < device_spec.memoryTypeCount; i++) {
+            if((requirements.memoryTypeBits & (1 << i)) && 
+            (device_spec.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+                memory_type = i;
+                break;
+            }
+        }
+        if(memory_type < 0) {
+            throw std::runtime_error("Vulkan failed to allocate memory for a depth buffer.");
+        }
+
+        // Allocate memory for the depth buffer
+        vk::MemoryAllocateInfo mem_alloc_info;
+        mem_alloc_info.allocationSize = requirements.size;
+        mem_alloc_info.memoryTypeIndex = memory_type;
+        
+        color_image_memory_ = logical_->allocateMemoryUnique(
+            mem_alloc_info
+        );
+        
+        // Bind depth buffer to memory
+        logical_->bindImageMemory(color_image_.get(), color_image_memory_.get(), 0);
+    }
+
+    // Create the depth image view
+    void create_color_view() {
+        vk::ImageViewCreateInfo view_info;
+        view_info.image = color_image_.get();
+        view_info.viewType = vk::ImageViewType::e2D;
+        view_info.format = image_format_;
+        
+        view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        view_info.subresourceRange.baseMipLevel = 0;
+        view_info.subresourceRange.levelCount = 1;
+        view_info.subresourceRange.baseArrayLayer = 0;
+        view_info.subresourceRange.layerCount = 1;
+
+        color_image_view_ = logical_->createImageViewUnique(view_info);
     }
 
     // Create the object buffer
@@ -1339,6 +1452,9 @@ class Renderer {
             create_depth_image();
             create_depth_view();
             
+            create_color_image();
+            create_color_view();
+
             create_render_pass();
             create_graphics_pipeline();
 
@@ -1385,6 +1501,9 @@ public:
 
             create_depth_image();
             create_depth_view();
+
+            create_color_image();
+            create_color_view();
 
             create_descriptor_layout();
             create_render_pass();
