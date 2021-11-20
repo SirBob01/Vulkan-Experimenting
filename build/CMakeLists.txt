@@ -13,7 +13,7 @@ add_executable("renderer" ${SOURCES})
 
 # Compile on Windows systems
 if(WIN32)
-    set(GLSLC "C:/VulkanSDK/1.2.176.1/Bin/glslangValidator.exe")
+    set(GLSLC "$ENV{VULKAN_SDK}/Bin/glslangValidator.exe")
     target_include_directories("renderer" PRIVATE "../src/renderer" ${Vulkan_INCLUDE_DIR})
     target_link_libraries("renderer" mingw32 SDL2main SDL2 ${Vulkan_LIBRARY})
 endif()
