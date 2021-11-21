@@ -23,6 +23,8 @@ class Pipeline {
 
     vk::PipelineColorBlendAttachmentState blender_attachment_;
 
+    std::vector<vk::DynamicState> dynamic_states_;
+
     // Pipeline states
     std::vector<vk::PipelineShaderStageCreateInfo> shader_stage_infos_;
     vk::PipelineVertexInputStateCreateInfo vertex_input_state_info_;

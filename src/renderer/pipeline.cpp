@@ -11,6 +11,10 @@ Pipeline::Pipeline(vk::Device &logical,
                    vk::SampleCountFlagBits msaa_samples,
                    size_t push_constants_size) {
     logical_ = logical;
+    dynamic_states_ = {
+        vk::DynamicState::eLineWidth,     // Change width of line drawing
+        vk::DynamicState::eBlendConstants // Change blending function
+    };
 
     create_shader_stage(
         vertex_shader, 
@@ -175,12 +179,8 @@ void Pipeline::create_depth_stencil_state() {
 }
 
 void Pipeline::create_dynamic_state() {
-    std::vector<vk::DynamicState> dynamic_states = {
-        vk::DynamicState::eLineWidth,     // Change width of line drawing
-        vk::DynamicState::eBlendConstants // Change blending function
-    };
-    dynamic_state_info_.dynamicStateCount = dynamic_states.size();
-    dynamic_state_info_.pDynamicStates = &dynamic_states[0];
+    dynamic_state_info_.dynamicStateCount = dynamic_states_.size();
+    dynamic_state_info_.pDynamicStates = &dynamic_states_[0];
 }
 
 void Pipeline::create_layout(vk::DescriptorSetLayout &set_layout,
