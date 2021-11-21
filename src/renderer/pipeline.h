@@ -68,9 +68,9 @@ public:
              std::vector<std::string> &fragment_shaders,
              vk::PrimitiveTopology primitive_topology,
              vk::PolygonMode polygon_mode,
+             vk::CullModeFlagBits cull_mode,
              vk::SampleCountFlagBits msaa_samples,
-             std::size_t push_constants_size,
-             bool backface_culling);
+             std::size_t push_constants_size);
 
     vk::Pipeline &get_handle();
 

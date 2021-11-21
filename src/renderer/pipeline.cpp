@@ -8,9 +8,9 @@ Pipeline::Pipeline(vk::Device &logical,
                    std::vector<std::string> &fragment_shaders,
                    vk::PrimitiveTopology primitive_topology,
                    vk::PolygonMode polygon_mode,
+                   vk::CullModeFlagBits cull_mode,
                    vk::SampleCountFlagBits msaa_samples,
-                   std::size_t push_constants_size,
-                   bool backface_culling) {
+                   std::size_t push_constants_size) {
     logical_ = logical;
 
     for(auto &vert_shader : vertex_shaders) {
@@ -29,14 +29,6 @@ Pipeline::Pipeline(vk::Device &logical,
     create_vertex_input_state();
     create_assembly_state(primitive_topology);
     create_viewport_state(image_extent);
-
-    vk::CullModeFlagBits cull_mode;
-    if(backface_culling) {
-        cull_mode = vk::CullModeFlagBits::eBack;
-    }
-    else {
-        cull_mode = vk::CullModeFlagBits::eNone;
-    }
     create_rasterization_state(polygon_mode, cull_mode);
     create_multisampler_state(msaa_samples);
     create_blender_state();
