@@ -35,29 +35,43 @@ class Pipeline {
     vk::PipelineDepthStencilStateCreateInfo depth_stencil_state_info_;
     vk::PipelineDynamicStateCreateInfo dynamic_state_info_;
 
+    // Load the compiled shader code and create each shader stage
     void create_shader_stage(std::string filename, 
                              vk::ShaderStageFlagBits stage);
 
+    // Describe the vertex input data
     void create_vertex_input_state();
 
+    // Describe the input assembly mode
     void create_assembly_state(vk::PrimitiveTopology primitive_topology);
 
+    // Describe the viewport
     void create_viewport_state(vk::Extent2D &extent);
 
+    // Describe the rasterization process
     void create_rasterization_state(vk::PolygonMode polygon_mode);
 
+    // Describe the multisampling process
     void create_multisampler_state(vk::SampleCountFlagBits msaa_samples);
 
+    // Describe the color blender
+    // TODO: Can be customized to allow different blend modes
     void create_blender_state();
     
+    // Describe the depth stencil
     void create_depth_stencil_state();
 
+    // Specify all dynamic states that can be manipulated
+    // from the command buffer
     void create_dynamic_state();
 
+    // Create the pipeline layout
     void create_layout(vk::DescriptorSetLayout &set_layout, 
                        std::size_t push_constants_size);
 
+    // Assemble the pipeline
     void assemble_stages(vk::RenderPass &render_pass);
+
 public:
     Pipeline(vk::Device &logical,
              vk::Extent2D &image_extent,
@@ -70,8 +84,10 @@ public:
              vk::SampleCountFlagBits msaa_samples,
              std::size_t push_constants_size);
 
+    // Get the handle to the pipeline
     vk::Pipeline &get_handle();
 
+    // Get the handle to the pipeline's layout
     vk::PipelineLayout &get_layout();
 };
 
