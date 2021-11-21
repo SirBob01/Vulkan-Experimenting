@@ -44,8 +44,7 @@ class Pipeline {
 
     void create_viewport_state(vk::Extent2D &extent);
 
-    void create_rasterization_state(vk::PolygonMode polygon_mode, 
-                                    vk::CullModeFlagBits cull_mode);
+    void create_rasterization_state(vk::PolygonMode polygon_mode);
 
     void create_multisampler_state(vk::SampleCountFlagBits msaa_samples);
 
@@ -68,7 +67,6 @@ public:
              std::vector<std::string> &fragment_shaders,
              vk::PrimitiveTopology primitive_topology,
              vk::PolygonMode polygon_mode,
-             vk::CullModeFlagBits cull_mode,
              vk::SampleCountFlagBits msaa_samples,
              std::size_t push_constants_size);
 

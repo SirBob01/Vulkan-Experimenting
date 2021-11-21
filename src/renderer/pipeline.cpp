@@ -8,7 +8,6 @@ Pipeline::Pipeline(vk::Device &logical,
                    std::vector<std::string> &fragment_shaders,
                    vk::PrimitiveTopology primitive_topology,
                    vk::PolygonMode polygon_mode,
-                   vk::CullModeFlagBits cull_mode,
                    vk::SampleCountFlagBits msaa_samples,
                    std::size_t push_constants_size) {
     logical_ = logical;
@@ -29,7 +28,7 @@ Pipeline::Pipeline(vk::Device &logical,
     create_vertex_input_state();
     create_assembly_state(primitive_topology);
     create_viewport_state(image_extent);
-    create_rasterization_state(polygon_mode, cull_mode);
+    create_rasterization_state(polygon_mode);
     create_multisampler_state(msaa_samples);
     create_blender_state();
     create_depth_stencil_state();
@@ -115,8 +114,7 @@ void Pipeline::create_viewport_state(vk::Extent2D &extent) {
     viewport_state_info_.pScissors = &scissor_;
 }
 
-void Pipeline::create_rasterization_state(vk::PolygonMode polygon_mode, 
-                                          vk::CullModeFlagBits cull_mode) {
+void Pipeline::create_rasterization_state(vk::PolygonMode polygon_mode) {
     rasterization_state_info_.depthClampEnable = false;
     rasterization_state_info_.rasterizerDiscardEnable = false;
 
@@ -128,7 +126,7 @@ void Pipeline::create_rasterization_state(vk::PolygonMode polygon_mode,
     rasterization_state_info_.lineWidth = 1.0;
 
     // Backface culling?
-    rasterization_state_info_.cullMode = cull_mode;
+    rasterization_state_info_.cullMode = vk::CullModeFlagBits::eBack;
     rasterization_state_info_.frontFace = vk::FrontFace::eCounterClockwise;
     
     // Manipulate the depth values?

@@ -686,7 +686,6 @@ class Renderer {
             fragment_shaders,
             vk::PrimitiveTopology::eTriangleList,
             vk::PolygonMode::eFill,
-            vk::CullModeFlagBits::eBack,
             msaa_samples_,
             sizeof(PushConstantObject)
         );
