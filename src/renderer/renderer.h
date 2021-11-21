@@ -24,6 +24,7 @@
 #include <memory>
 
 #include "pipeline.h"
+#include "image.h"
 #include "texture.h"
 #include "buffer.h"
 #include "physical.h"
@@ -450,33 +451,14 @@ class Renderer {
     // Create views to each swapchain image
     // Views are simply references to a specific part of an image
     void create_views() {
-        vk::ComponentMapping color_components(
-            vk::ComponentSwizzle::eR,
-            vk::ComponentSwizzle::eG,
-            vk::ComponentSwizzle::eB,
-            vk::ComponentSwizzle::eA
-        );
-
-        vk::ImageSubresourceRange subresource_range;
-        subresource_range.aspectMask = vk::ImageAspectFlagBits::eColor,
-        subresource_range.baseMipLevel = 0;
-        subresource_range.levelCount = 1;
-        subresource_range.baseArrayLayer = 0;
-        subresource_range.layerCount = 1;
-
-        // Create views for each image
         for(auto &image : images_) {
-            vk::ImageViewCreateInfo view_info;
-            view_info.image = image;
-            view_info.viewType = vk::ImageViewType::e2D;
-            view_info.format = image_format_;
-            
-            view_info.components = color_components;
-            view_info.subresourceRange = subresource_range;
-
             views_.push_back(
-                std::move(
-                    logical_->createImageViewUnique(view_info)
+                create_view(
+                    logical_.get(), 
+                    image, 
+                    image_format_, 
+                    vk::ImageAspectFlagBits::eColor, 
+                    1
                 )
             );
         }
@@ -820,22 +802,16 @@ class Renderer {
         auto supported = physical_->get_swapchain_support();
         auto extent2D = get_swapchain_extent(supported.capabilities);
 
-        vk::ImageCreateInfo image_info;
-        image_info.imageType = vk::ImageType::e2D;
-        image_info.format = get_depth_format();
-
-        image_info.extent.width = extent2D.width;
-        image_info.extent.height = extent2D.height;
-        image_info.extent.depth = 1;
-        
-        image_info.mipLevels = 1;
-        image_info.arrayLayers = 1;
-        image_info.samples = msaa_samples_;
-        image_info.tiling = vk::ImageTiling::eOptimal;
-        image_info.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
-        image_info.sharingMode = vk::SharingMode::eExclusive;
-
-        depth_image_ = logical_->createImageUnique(image_info);
+        depth_image_ = create_image(
+            logical_.get(),
+            extent2D.width,
+            extent2D.height,
+            1,
+            get_depth_format(),
+            vk::ImageTiling::eOptimal,
+            vk::ImageUsageFlagBits::eDepthStencilAttachment,
+            msaa_samples_
+        );
 
         auto requirements = logical_->getImageMemoryRequirements(depth_image_.get());
         auto device_spec = physical_->get_memory();
@@ -866,18 +842,13 @@ class Renderer {
 
     // Create the depth image view
     void create_depth_view() {
-        vk::ImageViewCreateInfo view_info;
-        view_info.image = depth_image_.get();
-        view_info.viewType = vk::ImageViewType::e2D;
-        view_info.format = get_depth_format();
-        
-        view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
-        view_info.subresourceRange.baseMipLevel = 0;
-        view_info.subresourceRange.levelCount = 1;
-        view_info.subresourceRange.baseArrayLayer = 0;
-        view_info.subresourceRange.layerCount = 1;
-
-        depth_view_ = logical_->createImageViewUnique(view_info);
+        depth_view_ = create_view(
+            logical_.get(),
+            depth_image_.get(),
+            get_depth_format(),
+            vk::ImageAspectFlagBits::eDepth,
+            1
+        );
     }
 
     vk::SampleCountFlagBits get_sample_count() {
@@ -898,23 +869,16 @@ class Renderer {
     void create_color_image() {
         auto supported = physical_->get_swapchain_support();
         auto extent2D = get_swapchain_extent(supported.capabilities);
-
-        vk::ImageCreateInfo image_info;
-        image_info.imageType = vk::ImageType::e2D;
-        image_info.format = image_format_;
-
-        image_info.extent.width = extent2D.width;
-        image_info.extent.height = extent2D.height;
-        image_info.extent.depth = 1;
-        
-        image_info.mipLevels = 1;
-        image_info.arrayLayers = 1;
-        image_info.samples = msaa_samples_;
-        image_info.tiling = vk::ImageTiling::eOptimal;
-        image_info.usage = vk::ImageUsageFlagBits::eColorAttachment;
-        image_info.sharingMode = vk::SharingMode::eExclusive;
-
-        color_image_ = logical_->createImageUnique(image_info);
+        color_image_ = create_image(
+            logical_.get(),
+            extent2D.width,
+            extent2D.height,
+            1,
+            image_format_,
+            vk::ImageTiling::eOptimal,
+            vk::ImageUsageFlagBits::eColorAttachment,
+            msaa_samples_
+        );
 
         auto requirements = logical_->getImageMemoryRequirements(color_image_.get());
         auto device_spec = physical_->get_memory();
@@ -945,18 +909,13 @@ class Renderer {
 
     // Create the depth image view
     void create_color_view() {
-        vk::ImageViewCreateInfo view_info;
-        view_info.image = color_image_.get();
-        view_info.viewType = vk::ImageViewType::e2D;
-        view_info.format = image_format_;
-        
-        view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-        view_info.subresourceRange.baseMipLevel = 0;
-        view_info.subresourceRange.levelCount = 1;
-        view_info.subresourceRange.baseArrayLayer = 0;
-        view_info.subresourceRange.layerCount = 1;
-
-        color_image_view_ = logical_->createImageViewUnique(view_info);
+        color_image_view_ = create_view(
+            logical_.get(),
+            color_image_.get(),
+            image_format_,
+            vk::ImageAspectFlagBits::eColor,
+            1
+        );
     }
 
     // Create the object buffer

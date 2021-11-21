@@ -19,24 +19,18 @@ TextureData::TextureData(vk::Device &logical,
     queue_ = queue;
 
     // Create the image
-    vk::ImageCreateInfo image_info;
-    image_info.imageType = vk::ImageType::e2D;
-    image_info.format = vk::Format::eR8G8B8A8Srgb;
-
-    image_info.extent.width = width;
-    image_info.extent.height = height;
-    image_info.extent.depth = 1;
-
-    image_info.mipLevels = mip_levels_;
-    image_info.arrayLayers = 1;
-    image_info.samples = vk::SampleCountFlagBits::e1;
-    image_info.tiling = vk::ImageTiling::eOptimal;
-    image_info.usage = vk::ImageUsageFlagBits::eTransferSrc |
-                       vk::ImageUsageFlagBits::eTransferDst | 
-                       vk::ImageUsageFlagBits::eSampled;
-    image_info.sharingMode = vk::SharingMode::eExclusive;
-
-    image_ = logical_.createImageUnique(image_info);
+    image_ = create_image(
+        logical_,
+        width,
+        height,
+        mip_levels_,
+        vk::Format::eR8G8B8A8Srgb,
+        vk::ImageTiling::eOptimal,
+        vk::ImageUsageFlagBits::eTransferSrc |
+        vk::ImageUsageFlagBits::eTransferDst | 
+        vk::ImageUsageFlagBits::eSampled,
+        vk::SampleCountFlagBits::e1
+    );
 
     // Load image data
     alloc_memory();
@@ -46,7 +40,15 @@ TextureData::TextureData(vk::Device &logical,
     );
     copy_from_buffer(staging_buffer);
     generate_mipmaps();
-    create_view();
+
+    // Create the image view
+    view_ = create_view(
+        logical_,
+        image_.get(),
+        vk::Format::eR8G8B8A8Srgb,
+        vk::ImageAspectFlagBits::eColor,
+        mip_levels_
+    );
 }
 
 TextureData::~TextureData() {
@@ -198,21 +200,6 @@ void TextureData::copy_from_buffer(RenderBuffer &buffer) {
 
     queue_.submit(submit_info, nullptr);
     queue_.waitIdle();
-}
-
-void TextureData::create_view() {
-    vk::ImageViewCreateInfo view_info;
-    view_info.image = image_.get();
-    view_info.viewType = vk::ImageViewType::e2D;
-    view_info.format = vk::Format::eR8G8B8A8Srgb;
-
-    view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-    view_info.subresourceRange.baseMipLevel = 0;
-    view_info.subresourceRange.levelCount = mip_levels_;
-    view_info.subresourceRange.baseArrayLayer = 0;
-    view_info.subresourceRange.layerCount = 1;
-
-    view_ = logical_.createImageViewUnique(view_info);
 }
 
 void TextureData::generate_mipmaps() {

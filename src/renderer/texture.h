@@ -4,6 +4,7 @@
 
 #include <vulkan/vulkan.hpp>
 
+#include "image.h"
 #include "buffer.h"
 #include "physical.h"
 
@@ -36,9 +37,6 @@ class TextureData {
 
     // Copy texel data from the buffer
     void copy_from_buffer(RenderBuffer &buffer);
-
-    // Create an image view
-    void create_view();
 
     // Generate the various mipmap levels for the texture
     void generate_mipmaps();
