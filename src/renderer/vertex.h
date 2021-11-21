@@ -21,7 +21,7 @@ struct Vertex {
 // Custom hash function for vertices
 template <>
 struct std::hash<Vertex> {
-    std::size_t operator()(Vertex const &vertex) const;
+    size_t operator()(Vertex const &vertex) const;
 };
 
 #endif

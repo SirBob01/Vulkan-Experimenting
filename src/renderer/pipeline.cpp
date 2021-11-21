@@ -9,7 +9,7 @@ Pipeline::Pipeline(vk::Device &logical,
                    vk::PrimitiveTopology primitive_topology,
                    vk::PolygonMode polygon_mode,
                    vk::SampleCountFlagBits msaa_samples,
-                   std::size_t push_constants_size) {
+                   size_t push_constants_size) {
     logical_ = logical;
 
     create_shader_stage(
@@ -184,7 +184,7 @@ void Pipeline::create_dynamic_state() {
 }
 
 void Pipeline::create_layout(vk::DescriptorSetLayout &set_layout,
-                             std::size_t push_constants_size) {
+                             size_t push_constants_size) {
     vk::PushConstantRange push_constant_range;
     push_constant_range.stageFlags = vk::ShaderStageFlagBits::eVertex;
     push_constant_range.offset = 0;

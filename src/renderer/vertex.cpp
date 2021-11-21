@@ -34,9 +34,9 @@ std::vector<vk::VertexInputAttributeDescription> Vertex::get_attribute_descripti
     return descriptions;
 }
 
-std::size_t std::hash<Vertex>::operator()(Vertex const &vertex) const {
-    std::size_t hash1 = std::hash<glm::vec3>()(vertex.position);
-    std::size_t hash2 = std::hash<glm::vec4>()(vertex.color);
-    std::size_t hash3 = std::hash<glm::vec2>()(vertex.tex_coord);
+size_t std::hash<Vertex>::operator()(Vertex const &vertex) const {
+    size_t hash1 = std::hash<glm::vec3>()(vertex.position);
+    size_t hash2 = std::hash<glm::vec4>()(vertex.color);
+    size_t hash3 = std::hash<glm::vec2>()(vertex.tex_coord);
     return ((hash1 ^ (hash2 << 1)) >> 1) ^ (hash3 << 1);
 }

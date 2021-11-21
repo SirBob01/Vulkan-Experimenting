@@ -66,7 +66,7 @@ class Pipeline {
 
     // Create the pipeline layout
     void create_layout(vk::DescriptorSetLayout &set_layout, 
-                       std::size_t push_constants_size);
+                       size_t push_constants_size);
 
     // Assemble the pipeline
     void assemble_stages(vk::RenderPass &render_pass);
@@ -81,7 +81,7 @@ public:
              vk::PrimitiveTopology primitive_topology,
              vk::PolygonMode polygon_mode,
              vk::SampleCountFlagBits msaa_samples,
-             std::size_t push_constants_size);
+             size_t push_constants_size);
 
     // Get the handle to the pipeline
     vk::Pipeline &get_handle();
