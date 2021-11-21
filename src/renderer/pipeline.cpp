@@ -4,26 +4,22 @@ Pipeline::Pipeline(vk::Device &logical,
                    vk::Extent2D &image_extent,
                    vk::DescriptorSetLayout &set_layout,
                    vk::RenderPass &render_pass,
-                   std::vector<std::string> &vertex_shaders,
-                   std::vector<std::string> &fragment_shaders,
+                   std::string vertex_shader,
+                   std::string fragment_shader,
                    vk::PrimitiveTopology primitive_topology,
                    vk::PolygonMode polygon_mode,
                    vk::SampleCountFlagBits msaa_samples,
                    std::size_t push_constants_size) {
     logical_ = logical;
 
-    for(auto &vert_shader : vertex_shaders) {
-        create_shader_stage(
-            vert_shader, 
-            vk::ShaderStageFlagBits::eVertex
-        );
-    }
-    for(auto &frag_shader : fragment_shaders) {
-        create_shader_stage(
-            frag_shader, 
-            vk::ShaderStageFlagBits::eFragment
-        );
-    }
+    create_shader_stage(
+        vertex_shader, 
+        vk::ShaderStageFlagBits::eVertex
+    );
+    create_shader_stage(
+        fragment_shader, 
+        vk::ShaderStageFlagBits::eFragment
+    );
     
     create_vertex_input_state();
     create_assembly_state(primitive_topology);

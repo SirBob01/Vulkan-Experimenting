@@ -670,20 +670,13 @@ class Renderer {
     // This is the heart of the Renderer, fixed at runtime
     // We can have multiple pipelines for different types of rendering
     void create_graphics_pipeline() {
-        std::vector<std::string> vertex_shaders = {
-            "base.vert.spv"
-        };
-        std::vector<std::string> fragment_shaders = {
-            "base.frag.spv"
-        };
-
         pipeline_ = std::make_unique<Pipeline>(
             logical_.get(),
             image_extent_,
             descriptor_layout_.get(),
             render_pass_.get(),
-            vertex_shaders,
-            fragment_shaders,
+            "base.vert.spv",
+            "base.frag.spv",
             vk::PrimitiveTopology::eTriangleList,
             vk::PolygonMode::eFill,
             msaa_samples_,
