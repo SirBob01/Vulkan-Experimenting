@@ -45,6 +45,9 @@ Pipeline::Pipeline(vk::Device &logical,
     create_layout(set_layout, push_constants_size);
     
     assemble_stages(render_pass);
+
+    // Save memory by deleting used shader modules
+    shader_modules_.clear();
 }
 
 void Pipeline::create_shader_stage(std::string filename, 
