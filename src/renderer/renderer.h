@@ -309,6 +309,8 @@ class Renderer {
         vk::PhysicalDeviceFeatures device_features;
         device_features.samplerAnisotropy = true;
         device_features.sampleRateShading = true;
+        device_features.fillModeNonSolid = true;
+        device_features.wideLines = true;
 
         vk::PhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_features;
         descriptor_indexing_features.descriptorBindingPartiallyBound = true;
@@ -740,6 +742,9 @@ class Renderer {
         rasterizer_state_info.rasterizerDiscardEnable = false;
         
         // Fill the polygon
+        // * eFill - Standard
+        // * eLine - Wireframe
+        // * ePoint - Point cloud
         rasterizer_state_info.polygonMode = vk::PolygonMode::eFill;
         
         // Line width of the mesh
