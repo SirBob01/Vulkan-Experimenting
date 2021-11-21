@@ -6,14 +6,16 @@
 #include <glm/glm.hpp>
 #include <glm/gtx/hash.hpp>
 
+#include <vector>
+
 struct Vertex {
     glm::vec3 position;
     glm::vec4 color;
     glm::vec2 tex_coord;
 
     bool operator==(const Vertex &other) const;
-    static vk::VertexInputBindingDescription get_binding_desc();
-    static std::array<vk::VertexInputAttributeDescription, 3> get_attribute_desc();
+    static vk::VertexInputBindingDescription get_binding_description();
+    static std::vector<vk::VertexInputAttributeDescription> get_attribute_descriptions();
 };
 
 // Custom hash function for vertices

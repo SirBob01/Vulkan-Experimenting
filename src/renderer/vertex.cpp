@@ -6,7 +6,7 @@ bool Vertex::operator==(const Vertex &other) const {
            tex_coord == other.tex_coord;
 }
 
-vk::VertexInputBindingDescription Vertex::get_binding_desc() {
+vk::VertexInputBindingDescription Vertex::get_binding_description() {
     vk::VertexInputBindingDescription desc(
         0,              // Index in array of bindings
         sizeof(Vertex)  // Stride (memory buffer traversal)
@@ -14,24 +14,24 @@ vk::VertexInputBindingDescription Vertex::get_binding_desc() {
     return desc;
 }
 
-std::array<vk::VertexInputAttributeDescription, 3> Vertex::get_attribute_desc() {
-    std::array<vk::VertexInputAttributeDescription, 3> desc;
-    desc[0] = {
+std::vector<vk::VertexInputAttributeDescription> Vertex::get_attribute_descriptions() {
+    std::vector<vk::VertexInputAttributeDescription> descriptions;
+    descriptions.push_back({
         0, 0, 
         vk::Format::eR32G32B32Sfloat, 
         offsetof(Vertex, position)
-    };
-    desc[1] = {
+    });
+    descriptions.push_back({
         1, 0, 
         vk::Format::eR32G32B32A32Sfloat, 
         offsetof(Vertex, color)
-    };
-    desc[2] = {
+    });
+    descriptions.push_back({
         2, 0,
         vk::Format::eR32G32Sfloat,
         offsetof(Vertex, tex_coord)
-    };
-    return desc;
+    });
+    return descriptions;
 }
 
 std::size_t std::hash<Vertex>::operator()(Vertex const &vertex) const {

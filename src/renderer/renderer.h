@@ -23,9 +23,10 @@
 #include <fstream>
 #include <memory>
 
-#include "physical.h"
+#include "pipeline.h"
 #include "texture.h"
 #include "buffer.h"
+#include "physical.h"
 #include "model.h"
 #include "vertex.h"
 #include "debug.h"
@@ -96,8 +97,7 @@ class Renderer {
 
     // Graphics pipeline
     vk::UniqueRenderPass render_pass_;
-    vk::UniquePipelineLayout layout_;
-    vk::UniquePipeline pipeline_;
+    std::unique_ptr<Pipeline> pipeline_;
 
     // Framebuffers
     std::vector<vk::UniqueFramebuffer> framebuffers_;
@@ -669,193 +669,27 @@ class Renderer {
     // This determines what and how things are drawn
     // This is the heart of the Renderer, fixed at runtime
     // We can have multiple pipelines for different types of rendering
-    // TODO: Make this its own class with subroutines for generating
-    //       different stages of the pipeline
     void create_graphics_pipeline() {
-        // Load all required shaders
-        auto vert_shader = create_shader(load_shader("base.vert.spv"));
-        auto frag_shader = create_shader(load_shader("base.frag.spv"));
-        
-        // Create the shader stages
-        vk::PipelineShaderStageCreateInfo vert_stage_info;
-        vert_stage_info.stage = vk::ShaderStageFlagBits::eVertex;
-        vert_stage_info.module = vert_shader.get();
-        vert_stage_info.pName = "main"; // Entry function
-        
-        vk::PipelineShaderStageCreateInfo frag_stage_info;
-        frag_stage_info.stage = vk::ShaderStageFlagBits::eFragment,
-        frag_stage_info.module = frag_shader.get();
-        frag_stage_info.pName = "main"; // Entry function
-        
-        std::vector<vk::PipelineShaderStageCreateInfo> shader_stages = {
-            vert_stage_info,
-            frag_stage_info
+        std::vector<std::string> vertex_shaders = {
+            "base.vert.spv"
+        };
+        std::vector<std::string> fragment_shaders = {
+            "base.frag.spv"
         };
 
-        // Vertex input stage
-        // These describe the data that will be placed in the buffers
-        auto binding_description = Vertex::get_binding_desc();
-        auto attribute_descriptions = Vertex::get_attribute_desc();
-
-        vk::PipelineVertexInputStateCreateInfo vertex_input_info;
-        vertex_input_info.vertexBindingDescriptionCount = 1;
-        vertex_input_info.pVertexBindingDescriptions = &binding_description;
-        vertex_input_info.vertexAttributeDescriptionCount = attribute_descriptions.size();
-        vertex_input_info.pVertexAttributeDescriptions = &attribute_descriptions[0];
-
-        // Input assembly stage
-        // Allows different primitives to be assembled, other than triangles
-        vk::PipelineInputAssemblyStateCreateInfo input_assembly_info;
-        input_assembly_info.topology = vk::PrimitiveTopology::eTriangleList;
-        input_assembly_info.primitiveRestartEnable = false;
-
-        // Viewport creation stage (region of the image to be drawn to)
-        vk::Viewport viewport;
-        
-        // Origin
-        viewport.x = 0.0f;
-        viewport.y = 0.0f;
-
-        // Dimensions
-        viewport.width = static_cast<float>(image_extent_.width);
-        viewport.height = static_cast<float>(image_extent_.height);
-        
-        // Render depth range
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
-
-        // Subsection of the viewport to be used (crop)
-        vk::Rect2D scissor;
-        scissor.offset.x = 0;
-        scissor.offset.y = 0;
-        scissor.extent = image_extent_;
-
-        vk::PipelineViewportStateCreateInfo viewport_state_info;
-        viewport_state_info.viewportCount = 1;
-        viewport_state_info.pViewports = &viewport;
-        viewport_state_info.scissorCount = 1;
-        viewport_state_info.pScissors = &scissor;
-
-        // Rasterization stage (converts vectors to pixels)
-        vk::PipelineRasterizationStateCreateInfo rasterizer_state_info;
-        rasterizer_state_info.depthClampEnable = false;
-        rasterizer_state_info.rasterizerDiscardEnable = false;
-        
-        // Fill the polygon
-        // * eFill - Standard
-        // * eLine - Wireframe
-        // * ePoint - Point cloud
-        rasterizer_state_info.polygonMode = vk::PolygonMode::eFill;
-        
-        // Line width of the mesh
-        rasterizer_state_info.lineWidth = 1.0f;
-        
-        // Backface culling
-        rasterizer_state_info.cullMode = vk::CullModeFlagBits::eBack;
-        rasterizer_state_info.frontFace = vk::FrontFace::eCounterClockwise;
-        
-        rasterizer_state_info.depthBiasEnable = false;
-        rasterizer_state_info.depthBiasConstantFactor = 0.0f;
-        rasterizer_state_info.depthBiasClamp = 0.0f;
-        rasterizer_state_info.depthBiasSlopeFactor = 0.0f;
-
-        // Multisampling stage (anti-aliasing)
-        vk::PipelineMultisampleStateCreateInfo multisampler_info;
-        multisampler_info.rasterizationSamples = msaa_samples_;
-        multisampler_info.sampleShadingEnable = true;
-        multisampler_info.minSampleShading = 0.5f; // Multisampling rate for the textures
-
-        // Create the color blender attachment for the blending stage
-        // Allows custom blending functions
-        vk::PipelineColorBlendAttachmentState blender_attachment;
-        blender_attachment.blendEnable = true;
-        blender_attachment.colorWriteMask = 
-            vk::ColorComponentFlagBits::eR | 
-            vk::ColorComponentFlagBits::eG |
-            vk::ColorComponentFlagBits::eB | 
-            vk::ColorComponentFlagBits::eA;
-        
-        // RGB blending operation
-        blender_attachment.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha;
-        blender_attachment.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
-        blender_attachment.colorBlendOp = vk::BlendOp::eAdd;
-
-        // Alpha blending operation
-        blender_attachment.srcAlphaBlendFactor = vk::BlendFactor::eOne;
-        blender_attachment.dstAlphaBlendFactor = vk::BlendFactor::eZero;
-        blender_attachment.alphaBlendOp = vk::BlendOp::eAdd;
-
-        // Blending stage
-        vk::PipelineColorBlendStateCreateInfo blend_state_info;
-        blend_state_info.logicOpEnable = false;
-        blend_state_info.logicOp = vk::LogicOp::eNoOp;
-        blend_state_info.attachmentCount = 1;
-        blend_state_info.pAttachments = &blender_attachment;
-
-        // Depth stencil stage
-        vk::PipelineDepthStencilStateCreateInfo depth_stencil_state_info;
-        depth_stencil_state_info.depthTestEnable = true;
-        depth_stencil_state_info.depthWriteEnable = true;
-        depth_stencil_state_info.depthCompareOp = vk::CompareOp::eLess;
-        depth_stencil_state_info.depthBoundsTestEnable = false;
-        depth_stencil_state_info.stencilTestEnable = false;
-
-        // Enumerate changeable dynamic (runtime) states
-        // TODO: Make these tweakable at runtime
-        std::vector<vk::DynamicState> dynamic_states = {
-            vk::DynamicState::eLineWidth,     // Change width of line drawing
-            vk::DynamicState::eBlendConstants // Change blending function
-        };
-        vk::PipelineDynamicStateCreateInfo dynamic_state_info;
-        dynamic_state_info.dynamicStateCount = dynamic_states.size();
-        dynamic_state_info.pDynamicStates = &dynamic_states[0];
-
-        // Define the push constant object
-        vk::PushConstantRange push_constant_range;
-        push_constant_range.stageFlags = vk::ShaderStageFlagBits::eVertex;
-        push_constant_range.offset = 0;
-        push_constant_range.size = sizeof(PushConstantObject);
-
-        // Define the pipeline layout
-        vk::PipelineLayoutCreateInfo layout_info;
-        layout_info.setLayoutCount = 1;
-        layout_info.pSetLayouts = &descriptor_layout_.get();
-        layout_info.pushConstantRangeCount = 1;
-        layout_info.pPushConstantRanges = &push_constant_range;
-
-        layout_ = logical_->createPipelineLayoutUnique(layout_info);
-
-        // Create the pipeline, assemble all the stages
-        vk::GraphicsPipelineCreateInfo pipeline_info;
-
-        // Shader stages
-        pipeline_info.stageCount = shader_stages.size();
-        pipeline_info.pStages = &shader_stages[0];
-
-        // Assembly stages
-        pipeline_info.pVertexInputState = &vertex_input_info;
-        pipeline_info.pInputAssemblyState = &input_assembly_info;
-
-        // Fixed function stages
-        pipeline_info.pViewportState = &viewport_state_info;
-        pipeline_info.pRasterizationState = &rasterizer_state_info;
-        pipeline_info.pMultisampleState = &multisampler_info;
-        pipeline_info.pDepthStencilState = &depth_stencil_state_info;
-        pipeline_info.pColorBlendState = &blend_state_info;
-        pipeline_info.pDynamicState = &dynamic_state_info;
-
-        // Layout and render pass
-        pipeline_info.layout = layout_.get();
-        pipeline_info.renderPass = render_pass_.get();
-        pipeline_info.subpass = 0; // Subpass index
-
-        // Derived pipeline?
-        pipeline_info.basePipelineHandle = nullptr;
-        pipeline_info.basePipelineIndex = 0;
-        
-        pipeline_ = logical_->createGraphicsPipelineUnique(
-            nullptr, pipeline_info
-        ).value;
+        pipeline_ = std::make_unique<Pipeline>(
+            logical_.get(),
+            image_extent_,
+            descriptor_layout_.get(),
+            render_pass_.get(),
+            vertex_shaders,
+            fragment_shaders,
+            vk::PrimitiveTopology::eTriangleList,
+            vk::PolygonMode::eFill,
+            msaa_samples_,
+            sizeof(PushConstantObject),
+            true
+        );
     }
 
     // Create the framebuffers for each swapchain image
@@ -1323,7 +1157,7 @@ class Renderer {
             // Bind the command buffer to the graphics pipeline
             graphics_commands_[i]->bindPipeline(
                 vk::PipelineBindPoint::eGraphics,
-                pipeline_.get()
+                pipeline_->get_handle()
             );
 
             // Draw each mesh
@@ -1346,7 +1180,7 @@ class Renderer {
 
                 // Bind desccriptor sets
                 graphics_commands_[i]->bindDescriptorSets(
-                    vk::PipelineBindPoint::eGraphics, layout_.get(),
+                    vk::PipelineBindPoint::eGraphics, pipeline_->get_layout(),
                     0, descriptor_sets_[i].get(), nullptr
                 );
 
@@ -1355,7 +1189,7 @@ class Renderer {
                     mesh.texture
                 };
                 graphics_commands_[i]->pushConstants(
-                    layout_.get(), 
+                    pipeline_->get_layout(), 
                     vk::ShaderStageFlagBits::eVertex,
                     0, 
                     sizeof(push_constant), 
