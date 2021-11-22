@@ -74,12 +74,12 @@ int ImagePool::suballoc(vk::Image &image) {
     // Find an existing compatible subbuffer
     auto requirements = logical_.getImageMemoryRequirements(image);
     for(auto &index : recycle_) {
-        Subbuffer &subbuffer = subbuffers_[index];
-        if(subbuffer.size >= requirements.size) {
+        Binding &binding = bindings_[index];
+        if(binding.size >= requirements.size) {
             logical_.bindImageMemory(
                 image, 
                 memory_.get(), 
-                subbuffer.offset
+                binding.offset
             );
             recycle_.erase(index);
             return index;
@@ -87,29 +87,27 @@ int ImagePool::suballoc(vk::Image &image) {
     }
     
     // Create a new subbuffer
-    Subbuffer subbuffer;
-    subbuffer.size = round_up(requirements.size, alignment_);
-    subbuffer.filled = 0;
-
-    if(subbuffers_.empty()) {
-        subbuffer.offset = 0;
+    Binding binding;
+    binding.size = round_up(requirements.size, alignment_);
+    if(bindings_.empty()) {
+        binding.offset = 0;
     }
     else {
-        Subbuffer &last = subbuffers_.back();
-        subbuffer.offset = last.offset + last.size;
+        Binding &last = bindings_.back();
+        binding.offset = last.offset + last.size;
     }
 
     // No more space!
-    if(subbuffer.offset + subbuffer.size > capacity_) {
+    if(binding.offset + binding.size > capacity_) {
         return -1;
     }
     logical_.bindImageMemory(
         image, 
         memory_.get(), 
-        subbuffer.offset
+        binding.offset
     );
-    subbuffers_.push_back(subbuffer);
-    return subbuffers_.size() - 1;
+    bindings_.push_back(binding);
+    return bindings_.size() - 1;
 }
 
 void ImagePool::remove(int index) {

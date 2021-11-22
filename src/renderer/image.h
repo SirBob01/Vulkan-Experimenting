@@ -50,10 +50,9 @@ struct ImageMemoryHandle {
 
 // A memory buffer for images
 class ImagePool {
-    struct Subbuffer {
+    struct Binding {
         size_t size;
         size_t offset;
-        size_t filled;
     };
 
     vk::Device logical_;
@@ -61,7 +60,7 @@ class ImagePool {
     size_t alignment_;
 
     vk::UniqueDeviceMemory memory_;
-    std::vector<Subbuffer> subbuffers_;
+    std::vector<Binding> bindings_;
     std::set<int> recycle_;
 
 public:
