@@ -41,14 +41,14 @@ struct std::hash<MemoryMeta> {
     size_t operator()(MemoryMeta const &memory_meta) const;
 };
 
-// A handle to an image memory subbuffer
+// A handle to an image memory binding
 struct ImageMemoryHandle {
     MemoryMeta memory_meta;
     int pool;
     int index;
 };
 
-// A memory buffer for images
+// A memory pool for images
 class ImagePool {
     struct Binding {
         size_t size;
@@ -68,7 +68,7 @@ public:
               MemoryMeta &memory_meta);
 
     // Suballocate an image to the pool
-    // This will attempt to defragment memory by recycling old subbuffers
+    // This will attempt to defragment memory by recycling old bindings
     int suballoc(vk::Image &image);
 
     // Remove an image from the pool

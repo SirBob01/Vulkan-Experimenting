@@ -71,8 +71,9 @@ ImagePool::ImagePool(vk::Device &logical,
 }
 
 int ImagePool::suballoc(vk::Image &image) {
-    // Find an existing compatible subbuffer
+    // Try recycling an old compatible binding
     auto requirements = logical_.getImageMemoryRequirements(image);
+    int found = -1;
     for(auto &index : recycle_) {
         Binding &binding = bindings_[index];
         if(binding.size >= requirements.size) {
@@ -81,9 +82,13 @@ int ImagePool::suballoc(vk::Image &image) {
                 memory_.get(), 
                 binding.offset
             );
-            recycle_.erase(index);
-            return index;
+            found = index;
+            break;
         }
+    }
+    if(found >= 0) {
+        recycle_.erase(found);
+        return found;
     }
     
     // Create a new subbuffer
