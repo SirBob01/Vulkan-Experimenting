@@ -87,7 +87,7 @@ class Renderer {
     // Color buffer for MSAA
     vk::SampleCountFlagBits msaa_samples_;
     vk::UniqueImage color_image_;
-    vk::UniqueImageView color_image_view_;
+    vk::UniqueImageView color_view_;
 
     // Image meta data
     vk::Extent2D image_extent_;
@@ -293,14 +293,15 @@ class Renderer {
 
         // Allocate queues
         std::vector<vk::DeviceQueueCreateInfo> queue_infos;
+        std::vector<std::vector<float>> priorities;
         for(auto &family : unique_families) {
             // Priorities influence scheduling command buffer execution
-            std::vector<float> priorities(family.count, 0.0f);
+            priorities.push_back(std::vector<float>(family.count, 0.0f));
             
             vk::DeviceQueueCreateInfo queue_info;
             queue_info.queueFamilyIndex = family.index;
             queue_info.queueCount = family.count;
-            queue_info.pQueuePriorities = &priorities[0];
+            queue_info.pQueuePriorities = &priorities.back()[0];
             
             queue_infos.push_back(queue_info);
         }
@@ -648,7 +649,7 @@ class Renderer {
     void create_framebuffers() {
         for(auto &view : views_) {
             std::vector<vk::ImageView> views = {
-                color_image_view_.get(),
+                color_view_.get(),
                 depth_view_.get(),
                 view.get()
             };
@@ -828,7 +829,7 @@ class Renderer {
         );
         image_memory_->allocate_memory(color_image_.get());
         
-        color_image_view_ = create_view(
+        color_view_ = create_view(
             logical_.get(),
             color_image_.get(),
             image_format_,
@@ -1439,19 +1440,19 @@ public:
         }
         staging_buffer_->clear(0);
         staging_buffer_->copy(0, pixels, image_size);
+
+        uint32_t mip_levels = std::floor(std::log2(std::max(width, height))) + 1;
         textures_.push_back(
-            std::move(
-                std::make_unique<TextureData>(
-                    width, 
-                    height,
-                    std::floor(std::log2(std::max(width, height))) + 1,
-                    logical_.get(), 
-                    *physical_,
-                    *image_memory_,
-                    *staging_buffer_,
-                    graphics_pool_.get(),
-                    graphics_queue_
-                )
+            std::make_unique<TextureData>(
+                width, 
+                height,
+                mip_levels,
+                logical_.get(), 
+                *physical_,
+                *image_memory_,
+                *staging_buffer_,
+                graphics_pool_.get(),
+                graphics_queue_
             )
         );
         staging_buffer_->clear(0);
