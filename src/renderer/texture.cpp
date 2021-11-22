@@ -1,13 +1,15 @@
 #include "texture.h"
 
-TextureData::TextureData(vk::Device &logical, 
-                         PhysicalDevice &physical,
-                         vk::CommandPool &command_pool,
-                         vk::Queue &queue,
-                         RenderBuffer &staging_buffer,
-                         uint32_t width, 
+TextureData::TextureData(uint32_t width, 
                          uint32_t height,
-                         uint32_t mip_levels) : physical_(physical) {
+                         uint32_t mip_levels,
+                         vk::Device &logical,
+                         PhysicalDevice &physical,
+                         ImageMemoryAllocator &allocator,
+                         RenderBuffer &staging_buffer,
+                         vk::CommandPool &command_pool,
+                         vk::Queue &queue) : physical_(physical), 
+                                             allocator_(allocator) {
     logical_ = logical;
     properties_ = vk::MemoryPropertyFlagBits::eDeviceLocal;
 
@@ -31,9 +33,9 @@ TextureData::TextureData(vk::Device &logical,
         vk::ImageUsageFlagBits::eSampled,
         vk::SampleCountFlagBits::e1
     );
+    handle_ = allocator_.allocate_memory(image_.get());
 
     // Load image data
-    alloc_memory();
     transition_layout(
         vk::ImageLayout::eUndefined, 
         vk::ImageLayout::eTransferDstOptimal
@@ -52,39 +54,8 @@ TextureData::TextureData(vk::Device &logical,
 }
 
 TextureData::~TextureData() {
+    allocator_.remove_image(handle_);
     image_.reset();
-}
-
-void TextureData::alloc_memory() {
-    auto requirements = logical_.getImageMemoryRequirements(
-        image_.get()
-    );
-    auto device_spec = physical_.get_memory();
-    int memory_type = -1;
-    for(uint32_t i = 0; i < device_spec.memoryTypeCount; i++) {
-        if((requirements.memoryTypeBits & (1 << i)) && 
-           (device_spec.memoryTypes[i].propertyFlags & properties_)) {
-            memory_type = i;
-            break;
-        }
-    }
-    if(memory_type < 0) {
-        throw std::runtime_error("Vulkan failed to allocate memory for a texture.");
-    }
-
-    // Allocate memory
-    vk::MemoryAllocateInfo mem_alloc_info;
-    mem_alloc_info.allocationSize = requirements.size;
-    mem_alloc_info.memoryTypeIndex = memory_type;
-
-    memory_ = logical_.allocateMemoryUnique(
-        mem_alloc_info
-    );
-    
-    // Bind the device memory to the image
-    logical_.bindImageMemory(
-        image_.get(), memory_.get(), 0
-    );
 }
 
 void TextureData::transition_layout(vk::ImageLayout from, vk::ImageLayout to) {

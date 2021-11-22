@@ -39,8 +39,6 @@
     #define DEBUG false
 #endif
 
-using ShaderBytes = std::vector<char>; // Vulkan shader bytecode for parsing
-
 struct PushConstantObject {
     int texture;
 };
@@ -84,12 +82,19 @@ class Renderer {
     
     // Depth buffer
     vk::UniqueImage depth_image_;
-    vk::UniqueDeviceMemory depth_image_memory_;
     vk::UniqueImageView depth_view_;
+
+    // Color buffer for MSAA
+    vk::SampleCountFlagBits msaa_samples_;
+    vk::UniqueImage color_image_;
+    vk::UniqueImageView color_image_view_;
 
     // Image meta data
     vk::Extent2D image_extent_;
     vk::Format image_format_;
+
+    // Image memory allocator
+    std::unique_ptr<ImageMemoryAllocator> image_memory_;
 
     // Descriptor set
     vk::UniqueDescriptorSetLayout descriptor_layout_;
@@ -151,12 +156,6 @@ class Renderer {
 
     // Mip levels for all textures
     uint32_t mip_levels_;
-
-    // Sampling count for MSAA
-    vk::SampleCountFlagBits msaa_samples_;
-    vk::UniqueImage color_image_;
-    vk::UniqueDeviceMemory color_image_memory_;
-    vk::UniqueImageView color_image_view_;
 
     bool vsync_ = false;
 
@@ -341,6 +340,12 @@ class Renderer {
         transfer_queue_  = logical_->getQueue(
             queues_.transfer.index, 0
         );
+
+        // Create the image memory allocator
+        image_memory_ = std::make_unique<ImageMemoryAllocator>(
+            logical_.get(),
+            *physical_
+        );
     }
 
     // Get the dimensions of the swapchain (viewport)
@@ -504,35 +509,6 @@ class Renderer {
         
         descriptor_layout_ = logical_->createDescriptorSetLayoutUnique(
             descriptor_layout_info
-        );
-    }
-
-    // TODO: Move this to its own class
-    // Load the bytecode of shader modules
-    ShaderBytes load_shader(std::string filename) {
-        std::ifstream file(filename, std::ios::ate | std::ios::binary);
-        if(!file.is_open()) {
-            throw std::runtime_error("Failed to load shader: " + filename);
-        }
-
-        size_t size = file.tellg();
-        ShaderBytes bytes(size);
-        
-        file.seekg(0);
-        file.read(&bytes[0], size);
-        file.close();
-
-        return bytes;
-    }
-
-    // Create a shader module for the graphics pipeline from bytecode
-    vk::UniqueShaderModule create_shader(ShaderBytes code) {
-        vk::ShaderModuleCreateInfo shader_info;
-        shader_info.codeSize = code.size();
-        shader_info.pCode = reinterpret_cast<uint32_t *>(&code[0]);
-
-        return logical_->createShaderModuleUnique(
-            shader_info
         );
     }
 
@@ -797,11 +773,10 @@ class Renderer {
         throw std::runtime_error("Could not find a suitable format for the depth buffer.");
     }
 
-    // Create the depth image
-    void create_depth_image() {
+    // Create the depth buffer
+    void create_depth_buffer() {
         auto supported = physical_->get_swapchain_support();
         auto extent2D = get_swapchain_extent(supported.capabilities);
-
         depth_image_ = create_image(
             logical_.get(),
             extent2D.width,
@@ -812,36 +787,8 @@ class Renderer {
             vk::ImageUsageFlagBits::eDepthStencilAttachment,
             msaa_samples_
         );
+        image_memory_->allocate_memory(depth_image_.get());
 
-        auto requirements = logical_->getImageMemoryRequirements(depth_image_.get());
-        auto device_spec = physical_->get_memory();
-        int memory_type = -1;
-        for(uint32_t i = 0; i < device_spec.memoryTypeCount; i++) {
-            if((requirements.memoryTypeBits & (1 << i)) && 
-            (device_spec.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
-                memory_type = i;
-                break;
-            }
-        }
-        if(memory_type < 0) {
-            throw std::runtime_error("Vulkan failed to allocate memory for a depth buffer.");
-        }
-
-        // Allocate memory for the depth buffer
-        vk::MemoryAllocateInfo mem_alloc_info;
-        mem_alloc_info.allocationSize = requirements.size;
-        mem_alloc_info.memoryTypeIndex = memory_type;
-        
-        depth_image_memory_ = logical_->allocateMemoryUnique(
-            mem_alloc_info
-        );
-        
-        // Bind depth buffer to memory
-        logical_->bindImageMemory(depth_image_.get(), depth_image_memory_.get(), 0);
-    }
-
-    // Create the depth image view
-    void create_depth_view() {
         depth_view_ = create_view(
             logical_.get(),
             depth_image_.get(),
@@ -865,8 +812,8 @@ class Renderer {
         return vk::SampleCountFlagBits::e1;
     }
 
-    // Create the multisampling color buffer image
-    void create_color_image() {
+    // Create the multisampling color buffer
+    void create_color_buffer() {
         auto supported = physical_->get_swapchain_support();
         auto extent2D = get_swapchain_extent(supported.capabilities);
         color_image_ = create_image(
@@ -879,36 +826,8 @@ class Renderer {
             vk::ImageUsageFlagBits::eColorAttachment,
             msaa_samples_
         );
-
-        auto requirements = logical_->getImageMemoryRequirements(color_image_.get());
-        auto device_spec = physical_->get_memory();
-        int memory_type = -1;
-        for(uint32_t i = 0; i < device_spec.memoryTypeCount; i++) {
-            if((requirements.memoryTypeBits & (1 << i)) && 
-            (device_spec.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
-                memory_type = i;
-                break;
-            }
-        }
-        if(memory_type < 0) {
-            throw std::runtime_error("Vulkan failed to allocate memory for a depth buffer.");
-        }
-
-        // Allocate memory for the depth buffer
-        vk::MemoryAllocateInfo mem_alloc_info;
-        mem_alloc_info.allocationSize = requirements.size;
-        mem_alloc_info.memoryTypeIndex = memory_type;
+        image_memory_->allocate_memory(color_image_.get());
         
-        color_image_memory_ = logical_->allocateMemoryUnique(
-            mem_alloc_info
-        );
-        
-        // Bind depth buffer to memory
-        logical_->bindImageMemory(color_image_.get(), color_image_memory_.get(), 0);
-    }
-
-    // Create the depth image view
-    void create_color_view() {
         color_image_view_ = create_view(
             logical_.get(),
             color_image_.get(),
@@ -1252,11 +1171,8 @@ class Renderer {
             create_swapchain();
             create_views();
             
-            create_depth_image();
-            create_depth_view();
-            
-            create_color_image();
-            create_color_view();
+            create_depth_buffer();
+            create_color_buffer();
 
             create_render_pass();
             create_graphics_pipeline();
@@ -1283,8 +1199,10 @@ public:
     Renderer(SDL_Window *window) {
         window_ = window;
         max_frames_processing_ = 3;
-        buffer_size_ = 1048576; // Initial buffer size (allocate large)
         current_frame_ = 0;
+
+        // 1M initial buffer size
+        buffer_size_ = 1024 * 1024;
 
         clear_value_.color.setFloat32({0, 0, 0, 1});
         depth_clear_value_.setDepthStencil({1, 0});
@@ -1302,11 +1220,8 @@ public:
             create_swapchain();
             create_views();
 
-            create_depth_image();
-            create_depth_view();
-
-            create_color_image();
-            create_color_view();
+            create_depth_buffer();
+            create_color_buffer();
 
             create_descriptor_layout();
             create_render_pass();
@@ -1341,6 +1256,7 @@ public:
     ~Renderer() {
         // Wait for logical device to finish all operations
         logical_->waitIdle();
+        textures_.clear();
         debugger_.reset();
     }
 
@@ -1526,14 +1442,15 @@ public:
         textures_.push_back(
             std::move(
                 std::make_unique<TextureData>(
-                    logical_.get(), 
-                    *physical_.get(),
-                    graphics_pool_.get(),
-                    graphics_queue_,
-                    *staging_buffer_.get(),
                     width, 
                     height,
-                    std::floor(std::log2(std::max(width, height))) + 1
+                    std::floor(std::log2(std::max(width, height))) + 1,
+                    logical_.get(), 
+                    *physical_,
+                    *image_memory_,
+                    *staging_buffer_,
+                    graphics_pool_.get(),
+                    graphics_queue_
                 )
             )
         );

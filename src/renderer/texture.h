@@ -18,9 +18,12 @@ class TextureData {
 
     vk::UniqueImage image_;
     vk::UniqueImageView view_;
-    vk::UniqueDeviceMemory memory_;
 
     vk::MemoryPropertyFlags properties_;
+    
+    // Image memory
+    ImageMemoryAllocator &allocator_;
+    ImageMemoryHandle handle_;
 
     uint32_t width_; 
     uint32_t height_;
@@ -28,9 +31,6 @@ class TextureData {
 
     vk::CommandPool command_pool_;
     vk::Queue queue_;
-
-    // Allocate device memory and bind to image
-    void alloc_memory();
 
     // Transition the image layout
     void transition_layout(vk::ImageLayout from, vk::ImageLayout to);
@@ -42,14 +42,15 @@ class TextureData {
     void generate_mipmaps();
 
 public:
-    TextureData(vk::Device &logical, 
-                PhysicalDevice &physical,
-                vk::CommandPool &command_pool,
-                vk::Queue &queue,
-                RenderBuffer &staging_buffer, 
-                uint32_t width, 
+    TextureData(uint32_t width, 
                 uint32_t height,
-                uint32_t mip_levels);
+                uint32_t mip_levels,
+                vk::Device &logical,
+                PhysicalDevice &physical,
+                ImageMemoryAllocator &allocator,
+                RenderBuffer &staging_buffer,
+                vk::CommandPool &command_pool,
+                vk::Queue &queue);
     ~TextureData();
 
     // Get the image this texture refers to
