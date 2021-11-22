@@ -55,7 +55,6 @@ TextureData::TextureData(uint32_t width,
 
 TextureData::~TextureData() {
     allocator_.remove_image(handle_);
-    image_.reset();
 }
 
 void TextureData::transition_layout(vk::ImageLayout from, vk::ImageLayout to) {
