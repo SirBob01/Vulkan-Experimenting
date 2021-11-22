@@ -1,5 +1,5 @@
 #include "image.h"
-#include <iostream>
+
 vk::UniqueImage create_image(vk::Device &logical,
                              uint32_t width,
                              uint32_t height,
@@ -74,11 +74,12 @@ int ImagePool::suballoc(vk::Image &image) {
     // Find an existing compatible subbuffer
     auto requirements = logical_.getImageMemoryRequirements(image);
     for(auto &index : recycle_) {
-        if(subbuffers_[index].size >= requirements.size) {
+        Subbuffer &subbuffer = subbuffers_[index];
+        if(subbuffer.size >= requirements.size) {
             logical_.bindImageMemory(
                 image, 
                 memory_.get(), 
-                subbuffers_[index].offset
+                subbuffer.offset
             );
             recycle_.erase(index);
             return index;
