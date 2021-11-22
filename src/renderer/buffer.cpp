@@ -169,8 +169,9 @@ void RenderBuffer::resuballoc(SubBuffer buffer, size_t size) {
     }
     if(shift_length) {
         // Make the temporary buffer large enough to silence validation warnings
+        size_t min_temp = 1024 * 1024;
         RenderBuffer temp(
-            std::max(shift_length, 1024UL * 1024UL), logical_, physical_, usage_, 
+            std::max(shift_length, min_temp), logical_, physical_, usage_, 
             properties_, command_buffer_, command_pool_, transfer_queue_
         );
         copy_to_offset(
