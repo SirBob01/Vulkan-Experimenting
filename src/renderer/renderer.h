@@ -83,11 +83,13 @@ class Renderer {
     // Depth buffer
     vk::UniqueImage depth_image_;
     vk::UniqueImageView depth_view_;
+    ImageMemoryHandle depth_memory_handle_;
 
     // Color buffer for MSAA
     vk::SampleCountFlagBits msaa_samples_;
     vk::UniqueImage color_image_;
     vk::UniqueImageView color_view_;
+    ImageMemoryHandle color_memory_handle_;
 
     // Image meta data
     vk::Extent2D image_extent_;
@@ -788,7 +790,7 @@ class Renderer {
             vk::ImageUsageFlagBits::eDepthStencilAttachment,
             msaa_samples_
         );
-        image_memory_->allocate_memory(depth_image_.get());
+        depth_memory_handle_ = image_memory_->allocate_memory(depth_image_.get());
 
         depth_view_ = create_view(
             logical_.get(),
@@ -827,7 +829,7 @@ class Renderer {
             vk::ImageUsageFlagBits::eColorAttachment,
             msaa_samples_
         );
-        image_memory_->allocate_memory(color_image_.get());
+        color_memory_handle_ = image_memory_->allocate_memory(color_image_.get());
         
         color_view_ = create_view(
             logical_.get(),
@@ -1172,6 +1174,11 @@ class Renderer {
             create_swapchain();
             create_views();
             
+            // Reset memory handles for depth and color buffers
+            image_memory_->remove_image(depth_memory_handle_);
+            image_memory_->remove_image(color_memory_handle_);
+            
+            // Reset buffer images
             create_depth_buffer();
             create_color_buffer();
 
