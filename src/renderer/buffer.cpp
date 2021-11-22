@@ -168,9 +168,9 @@ void RenderBuffer::resuballoc(SubBuffer buffer, size_t size) {
         subbuffers_[i].offset += shift;
     }
     if(shift_length) {
-        // TODO: Can we do this without allocating a temporary buffer?
+        // Make the temporary buffer large enough to silence validation warnings
         RenderBuffer temp(
-            shift_length, logical_, physical_, usage_, 
+            std::max(shift_length, 1024UL * 1024UL), logical_, physical_, usage_, 
             properties_, command_buffer_, command_pool_, transfer_queue_
         );
         copy_to_offset(
