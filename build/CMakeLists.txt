@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 3.10)
 project(.)
 
 find_package(Vulkan REQUIRED)
-find_package(SDL2 REQUIRED)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -g -O")
 
@@ -19,6 +18,7 @@ endif()
 
 # Compile on Linux systems
 if(UNIX OR MSVC)
+    find_package(SDL2 REQUIRED)
     set(GLSLC "glslangValidator")
     target_link_libraries("renderer" ${SDL2_LIBRARIES} ${Vulkan_LIBRARIES})
 endif()
