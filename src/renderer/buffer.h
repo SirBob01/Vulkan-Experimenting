@@ -11,7 +11,7 @@
 #include "util.h"
 
 // An integer handle to a SubBuffer in a buffer
-using SubBuffer = int;
+using SubBuffer = uint32_t;
 
 // RenderBuffer represents an allocated block of memory in
 // the device. It can be resized similar to realloc and

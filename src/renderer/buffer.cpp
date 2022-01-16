@@ -163,7 +163,7 @@ void RenderBuffer::resuballoc(SubBuffer buffer, size_t size) {
 
     // Perform the copying
     buffer_data.size = size;
-    for(int i = buffer+1; i < subbuffers_.size(); i++) {
+    for(SubBuffer i = buffer+1; i < subbuffers_.size(); i++) {
         shift_length += subbuffers_[i].size;
         subbuffers_[i].offset += shift;
     }
