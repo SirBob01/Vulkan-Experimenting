@@ -17,7 +17,7 @@
 #include <chrono>
 
 #include <vector>
-
+#include <unordered_map>
 #include <exception>
 #include <iostream>
 #include <fstream>
@@ -28,7 +28,7 @@
 #include "texture.h"
 #include "buffer.h"
 #include "physical.h"
-#include "model.h"
+#include "mesh.h"
 #include "vertex.h"
 #include "debug.h"
 #include "util.h"
@@ -47,7 +47,10 @@ struct UniformBufferObject {
     alignas(16) glm::mat4 transform;
 };
 
-struct MeshData {
+// Unique handle for models
+using Model = int;
+
+struct ModelData {
     SubBuffer vertexes;
     SubBuffer indexes;
     Texture texture = 0;
@@ -55,7 +58,7 @@ struct MeshData {
 
 // TODO: Implement better command buffer management
 // Idea: Create classes of command pools (static/dynamic)
-class Renderer {
+class Core {
     SDL_Window *window_;
 
     // Required extensions and validation layers
@@ -128,8 +131,11 @@ class Renderer {
     // Object buffer is a one-size-fits-all for vertex and index data
     std::unique_ptr<RenderBuffer> staging_buffer_;
     std::unique_ptr<RenderBuffer> object_buffer_;
-    std::vector<MeshData> mesh_data_;
     size_t buffer_size_;
+    
+    // Manage model data
+    std::unordered_map<Model, ModelData> model_data_;
+    Model model_id_;
 
     // Uniform buffers
     std::unique_ptr<RenderBuffer> uniform_buffer_;
@@ -519,7 +525,6 @@ class Renderer {
     // Describes the scope of a render operation (color, depth, stencil)
     // Lists attachments, dependencies, and subpasses
     // Driver knows what to expect for render operation
-    // TODO: Make this its own class to allow custom render passes and attachments
     void create_render_pass() {
         // Color buffer for a single swapchain image
         vk::AttachmentDescription color_attachment;
@@ -628,7 +633,7 @@ class Renderer {
 
     // Initialize all stages of the graphics pipeline
     // This determines what and how things are drawn
-    // This is the heart of the Renderer, fixed at runtime
+    // This is the heart of the renderer, fixed at runtime
     // We can have multiple pipelines for different types of rendering
     void create_graphics_pipeline() {
         pipeline_ = std::make_unique<Pipeline>(
@@ -1037,17 +1042,19 @@ class Renderer {
             // TODO: Use secondary buffers for multithreaded rendering
             //       Secondary buffers are hidden from CPU but can be
             //       called by primary command buffers
-            for(auto &mesh : mesh_data_) {
+            for(auto &pair : model_data_) {
+                ModelData &model = pair.second;
+
                 // Bind the vertex and index sub-buffers to the command queue
                 std::vector<vk::DeviceSize> offsets = {
-                    object_buffer_->get_offset(mesh.vertexes)
+                    object_buffer_->get_offset(model.vertexes)
                 };
                 graphics_commands_[i]->bindVertexBuffers(
                     0, object_buffer_->get_handle(), offsets
                 );
                 graphics_commands_[i]->bindIndexBuffer(
                     object_buffer_->get_handle(), 
-                    object_buffer_->get_offset(mesh.indexes), 
+                    object_buffer_->get_offset(model.indexes), 
                     vk::IndexType::eUint32
                 );
 
@@ -1059,7 +1066,7 @@ class Renderer {
 
                 // Send push constant data to shader stages
                 PushConstantObject push_constant = {
-                    mesh.texture
+                    model.texture
                 };
                 graphics_commands_[i]->pushConstants(
                     pipeline_->get_layout(), 
@@ -1071,7 +1078,7 @@ class Renderer {
                     
                 // Draw the mesh
                 graphics_commands_[i]->drawIndexed(
-                    object_buffer_->get_subfill(mesh.indexes) / sizeof(uint32_t),
+                    object_buffer_->get_subfill(model.indexes) / sizeof(uint32_t),
                     1, 0, 0, 0
                 );
             }
@@ -1204,13 +1211,15 @@ class Renderer {
     }
 
 public:
-    Renderer(SDL_Window *window) {
+    Core(SDL_Window *window) {
         window_ = window;
         max_frames_processing_ = 3;
         current_frame_ = 0;
 
         // 1M initial buffer size
         buffer_size_ = 1024 * 1024;
+        
+        model_id_ = 0;
 
         clear_value_.color.setFloat32({0, 0, 0, 1});
         depth_clear_value_.setDepthStencil({1, 0});
@@ -1261,7 +1270,7 @@ public:
         }
     }
 
-    ~Renderer() {
+    ~Core() {
         // Wait for logical device to finish all operations
         logical_->waitIdle();
         textures_.clear();
@@ -1352,6 +1361,7 @@ public:
 
     void set_vsync(bool vsync) {
         vsync_ = vsync;
+        reset_swapchain();
     }
 
     bool get_vsync() {
@@ -1379,14 +1389,14 @@ public:
     // * Clear the index and staging buffers
 
     // Alternative? Record secondary buffer ONLY when something new is added
-    void add_mesh(Model &model, Texture texture) {
-        int index_len_bytes = sizeof(model.indices[0]) * model.indices.size();
-        int vertex_len_bytes = sizeof(model.vertices[0]) * model.vertices.size();
+    Model add_model(Mesh &mesh, Texture texture) {
+        int index_len_bytes = sizeof(mesh.indices[0]) * mesh.indices.size();
+        int vertex_len_bytes = sizeof(mesh.vertices[0]) * mesh.vertices.size();
 
         // Copy the index data
         SubBuffer indices = object_buffer_->suballoc(index_len_bytes);
         staging_buffer_->clear(0);
-        staging_buffer_->copy(0, &model.indices[0], index_len_bytes);
+        staging_buffer_->copy(0, &mesh.indices[0], index_len_bytes);
         staging_buffer_->copy_buffer(
             *object_buffer_, 
             index_len_bytes, 
@@ -1397,7 +1407,7 @@ public:
         // Copy the vertex data
         SubBuffer vertices = object_buffer_->suballoc(vertex_len_bytes);
         staging_buffer_->clear(0);
-        staging_buffer_->copy(0, &model.vertices[0], vertex_len_bytes);
+        staging_buffer_->copy(0, &mesh.vertices[0], vertex_len_bytes);
         staging_buffer_->copy_buffer(
             *object_buffer_, 
             vertex_len_bytes, 
@@ -1405,25 +1415,25 @@ public:
             vertices
         );
 
-        // TODO: Add custom texture
         // Give each mesh its own descriptor set
-        mesh_data_.push_back({
+        model_data_[model_id_++] = {
             vertices,
             indices,
             texture
-        });
+        };
         record_commands();
+        return model_id_ - 1;
     }
 
     // Testing dynamic subbuffer removal
-    void remove_mesh() {
-        if(mesh_data_.empty()) {
+    void remove_model(Model model) {
+        if(model_data_.find(model) == model_data_.end()) {
             return;
         }
-        MeshData mesh = mesh_data_.back();
-        object_buffer_->delete_subbuffer(mesh.indexes);
-        object_buffer_->delete_subbuffer(mesh.vertexes);
-        mesh_data_.pop_back();
+        ModelData data = model_data_[model];
+        object_buffer_->delete_subbuffer(data.indexes);
+        object_buffer_->delete_subbuffer(data.vertexes);
+        model_data_.erase(model);
         record_commands();
     }
 
@@ -1465,7 +1475,11 @@ public:
         staging_buffer_->clear(0);
         reset_descriptor_sets();
         return textures_.size() - 1;
-    } 
+    }
+    
+    // Unload a texture
+    void unload_texture(Texture texture) {
+    }
 };
 
 #endif

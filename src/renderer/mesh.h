@@ -1,5 +1,5 @@
-#ifndef MODEL_H_
-#define MODEL_H_
+#ifndef MESH_H_
+#define MESH_H_
 
 #include <vector>
 #include <unordered_map>
@@ -7,12 +7,13 @@
 #include "assets/tiny_obj_loader.h"
 #include "vertex.h"
 
-struct Model {
+// Stores the raw mesh data
+struct Mesh {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
 
-    Model() {};
-    Model(const std::string obj_filename);
+    Mesh() {};
+    Mesh(const std::string obj_filename);
 };
 
 #endif

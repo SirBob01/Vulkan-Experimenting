@@ -6,6 +6,10 @@ layout(binding = 0) uniform UniformBufferObject {
 } ubo;
 layout(push_constant) uniform ObjectData {
     int textureIndex;
+    int xOffset;
+    int yOffset;
+    int width;
+    int height;
 } PushConstant;
 
 layout(location = 0) in vec3 inPosition;

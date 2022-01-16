@@ -1,5 +1,5 @@
 #include <SDL2/SDL.h>
-#include "renderer/renderer.h"
+#include "renderer/core.h"
 
 // Entry point
 // Simulates Dynamo's update pipeline
@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
     );
 
     // Instantiate Renderer class
-    Renderer renderer(window);
+    Core renderer(window);
 
     // Load textures
     Texture t1 = renderer.load_texture("../assets/texture.jpg");
@@ -34,7 +34,7 @@ int main(int argc, char **argv) {
     Texture viking_room_texture = renderer.load_texture("../assets/viking_room.png");
 
     // Load models
-    Model squares;
+    Mesh squares;
     squares.vertices = {
         {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
         {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
@@ -50,7 +50,9 @@ int main(int argc, char **argv) {
         0, 1, 2, 2, 3, 0,
         4, 5, 6, 6, 7, 4
     };
-    Model viking_room("../assets/viking_room.obj");
+    Mesh viking_room("../assets/viking_room.obj");
+
+    std::vector<Model> models;
 
     SDL_Event e;
     bool running = true;
@@ -84,19 +86,21 @@ int main(int argc, char **argv) {
                     }
                 }
                 else if(e.key.keysym.sym == SDLK_t) {
-                    renderer.add_mesh(squares, 0);
+                    models.push_back(renderer.add_model(squares, 0));
                 }
                 else if(e.key.keysym.sym == SDLK_y) {
-                    renderer.add_mesh(squares, t1);
+                    models.push_back(renderer.add_model(squares, t1));
                 }
                 else if(e.key.keysym.sym == SDLK_u) {
-                    renderer.add_mesh(squares, t2);
+                    models.push_back(renderer.add_model(squares, t2));
                 }
                 else if(e.key.keysym.sym == SDLK_i) {
-                    renderer.add_mesh(viking_room, viking_room_texture);
+                    models.push_back(renderer.add_model(viking_room, viking_room_texture));
                 }
                 else if(e.key.keysym.sym == SDLK_r) {
-                    renderer.remove_mesh();
+                    Model model = models.back();
+                    renderer.remove_model(model);
+                    models.pop_back();
                 }
             }
         }

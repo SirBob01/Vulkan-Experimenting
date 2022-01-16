@@ -1,7 +1,7 @@
 #define TINYOBJLOADER_IMPLEMENTATION
-#include "model.h"
+#include "mesh.h"
 
-Model::Model(const std::string obj_filename) {
+Mesh::Mesh(const std::string obj_filename) {
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
     std::vector<tinyobj::material_t> materials;
